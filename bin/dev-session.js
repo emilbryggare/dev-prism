@@ -1,10 +1,22 @@
 #!/usr/bin/env node
 
 import { Command } from 'commander';
+import chalk from 'chalk';
 import { createSession } from '../dist/commands/create.js';
 import { destroySession } from '../dist/commands/destroy.js';
 import { listSessions } from '../dist/commands/list.js';
 import { installClaude } from '../dist/commands/claude.js';
+import { NotAGitRepositoryError } from '../dist/lib/worktree.js';
+
+function handleGitRepoError(error) {
+  if (error instanceof NotAGitRepositoryError) {
+    console.error(chalk.red('Error: Not a git repository.\n'));
+    console.error(chalk.gray('dev-session must be run from within a git repository.'));
+    console.error(chalk.gray('Navigate to your project directory and try again.'));
+    process.exit(1);
+  }
+  throw error;
+}
 
 const program = new Command();
 
@@ -21,13 +33,17 @@ program
   .option('-W, --without <apps>', 'Exclude apps (comma-separated: app,web,widget)', (val) => val.split(','))
   .option('--no-detach', 'Stream container logs after starting (default: detach)')
   .action(async (sessionId, options) => {
-    const projectRoot = process.cwd();
-    await createSession(projectRoot, sessionId, {
-      mode: options.mode,
-      branch: options.branch,
-      detach: options.detach,
-      without: options.without,
-    });
+    try {
+      const projectRoot = process.cwd();
+      await createSession(projectRoot, sessionId, {
+        mode: options.mode,
+        branch: options.branch,
+        detach: options.detach,
+        without: options.without,
+      });
+    } catch (error) {
+      handleGitRepoError(error);
+    }
   });
 
 program
@@ -35,16 +51,24 @@ program
   .description('Destroy a development session')
   .option('-a, --all', 'Destroy all sessions')
   .action(async (sessionId, options) => {
-    const projectRoot = process.cwd();
-    await destroySession(projectRoot, sessionId, { all: options.all });
+    try {
+      const projectRoot = process.cwd();
+      await destroySession(projectRoot, sessionId, { all: options.all });
+    } catch (error) {
+      handleGitRepoError(error);
+    }
   });
 
 program
   .command('list')
   .description('List all active development sessions')
   .action(async () => {
-    const projectRoot = process.cwd();
-    await listSessions(projectRoot);
+    try {
+      const projectRoot = process.cwd();
+      await listSessions(projectRoot);
+    } catch (error) {
+      handleGitRepoError(error);
+    }
   });
 
 program
@@ -126,63 +150,67 @@ program
   .command('stop-all')
   .description('Stop all running sessions (preserves data)')
   .action(async () => {
-    const projectRoot = process.cwd();
-    const chalk = (await import('chalk')).default;
-    const { loadConfig, getSessionDir } = await import('../dist/lib/config.js');
-    const { getSessionWorktrees } = await import('../dist/lib/worktree.js');
-    const docker = await import('../dist/lib/docker.js');
-    const { existsSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
+    try {
+      const projectRoot = process.cwd();
+      const chalk = (await import('chalk')).default;
+      const { loadConfig, getSessionDir } = await import('../dist/lib/config.js');
+      const { getSessionWorktrees } = await import('../dist/lib/worktree.js');
+      const docker = await import('../dist/lib/docker.js');
+      const { existsSync } = await import('node:fs');
+      const { resolve } = await import('node:path');
 
-    const config = await loadConfig(projectRoot);
-    const sessions = await getSessionWorktrees(projectRoot);
+      const config = await loadConfig(projectRoot);
+      const sessions = await getSessionWorktrees(projectRoot);
 
-    if (sessions.length === 0) {
-      console.log(chalk.gray('No sessions found.'));
-      return;
-    }
+      if (sessions.length === 0) {
+        console.log(chalk.gray('No sessions found.'));
+        return;
+      }
 
-    // Find running sessions
-    const runningSessions = [];
-    for (const session of sessions) {
-      const envFile = resolve(session.path, '.env.session');
-      if (existsSync(envFile)) {
-        const running = await docker.isRunning({ cwd: session.path });
-        if (running) {
-          runningSessions.push(session);
+      // Find running sessions
+      const runningSessions = [];
+      for (const session of sessions) {
+        const envFile = resolve(session.path, '.env.session');
+        if (existsSync(envFile)) {
+          const running = await docker.isRunning({ cwd: session.path });
+          if (running) {
+            runningSessions.push(session);
+          }
         }
       }
-    }
 
-    if (runningSessions.length === 0) {
-      console.log(chalk.gray('No running sessions found.'));
-      return;
-    }
-
-    console.log(chalk.blue(`Stopping ${runningSessions.length} running session(s)...\n`));
-
-    // Get all app profiles and service names to ensure we stop everything
-    const allApps = config.apps ?? ['app', 'web', 'widget'];
-    const profileFlags = allApps.flatMap((p) => ['--profile', p]);
-    // Explicitly list all services to stop (infrastructure + apps)
-    const allServices = ['postgres', 'mailpit', 'convas-app', 'convas-web', 'convas-widget'];
-
-    const { execa } = await import('execa');
-    for (const session of runningSessions) {
-      console.log(chalk.gray(`  Stopping session ${session.sessionId}...`));
-      try {
-        await execa(
-          'docker',
-          ['compose', '-f', 'docker-compose.session.yml', '--env-file', '.env.session', ...profileFlags, 'stop', ...allServices],
-          { cwd: session.path, stdio: 'pipe' }
-        );
-        console.log(chalk.green(`  Session ${session.sessionId} stopped.`));
-      } catch (error) {
-        console.log(chalk.yellow(`  Warning: Could not stop session ${session.sessionId}`));
+      if (runningSessions.length === 0) {
+        console.log(chalk.gray('No running sessions found.'));
+        return;
       }
-    }
 
-    console.log(chalk.green(`\nStopped ${runningSessions.length} session(s).`));
+      console.log(chalk.blue(`Stopping ${runningSessions.length} running session(s)...\n`));
+
+      // Get all app profiles and service names to ensure we stop everything
+      const allApps = config.apps ?? ['app', 'web', 'widget'];
+      const profileFlags = allApps.flatMap((p) => ['--profile', p]);
+      // Explicitly list all services to stop (infrastructure + apps)
+      const allServices = ['postgres', 'mailpit', 'convas-app', 'convas-web', 'convas-widget'];
+
+      const { execa } = await import('execa');
+      for (const session of runningSessions) {
+        console.log(chalk.gray(`  Stopping session ${session.sessionId}...`));
+        try {
+          await execa(
+            'docker',
+            ['compose', '-f', 'docker-compose.session.yml', '--env-file', '.env.session', ...profileFlags, 'stop', ...allServices],
+            { cwd: session.path, stdio: 'pipe' }
+          );
+          console.log(chalk.green(`  Session ${session.sessionId} stopped.`));
+        } catch (error) {
+          console.log(chalk.yellow(`  Warning: Could not stop session ${session.sessionId}`));
+        }
+      }
+
+      console.log(chalk.green(`\nStopped ${runningSessions.length} session(s).`));
+    } catch (error) {
+      handleGitRepoError(error);
+    }
   });
 
 program
@@ -190,88 +218,92 @@ program
   .description('Remove all stopped sessions (destroys data)')
   .option('-y, --yes', 'Skip confirmation prompt')
   .action(async (options) => {
-    const projectRoot = process.cwd();
-    const chalk = (await import('chalk')).default;
-    const { loadConfig } = await import('../dist/lib/config.js');
-    const { getSessionWorktrees, removeWorktree } = await import('../dist/lib/worktree.js');
-    const docker = await import('../dist/lib/docker.js');
-    const { existsSync } = await import('node:fs');
-    const { resolve } = await import('node:path');
-    const readline = await import('node:readline');
+    try {
+      const projectRoot = process.cwd();
+      const chalk = (await import('chalk')).default;
+      const { loadConfig } = await import('../dist/lib/config.js');
+      const { getSessionWorktrees, removeWorktree } = await import('../dist/lib/worktree.js');
+      const docker = await import('../dist/lib/docker.js');
+      const { existsSync } = await import('node:fs');
+      const { resolve } = await import('node:path');
+      const readline = await import('node:readline');
 
-    const config = await loadConfig(projectRoot);
-    const sessions = await getSessionWorktrees(projectRoot);
+      const config = await loadConfig(projectRoot);
+      const sessions = await getSessionWorktrees(projectRoot);
 
-    if (sessions.length === 0) {
-      console.log(chalk.gray('No sessions found.'));
-      return;
-    }
-
-    // Find stopped sessions
-    const stoppedSessions = [];
-    for (const session of sessions) {
-      const envFile = resolve(session.path, '.env.session');
-      let running = false;
-      if (existsSync(envFile)) {
-        running = await docker.isRunning({ cwd: session.path });
-      }
-      if (!running) {
-        stoppedSessions.push(session);
-      }
-    }
-
-    if (stoppedSessions.length === 0) {
-      console.log(chalk.gray('No stopped sessions to prune.'));
-      return;
-    }
-
-    console.log(chalk.yellow(`\nFound ${stoppedSessions.length} stopped session(s) to prune:`));
-    for (const session of stoppedSessions) {
-      console.log(chalk.gray(`  - Session ${session.sessionId} (${session.branch})`));
-    }
-    console.log('');
-
-    // Confirm unless --yes flag provided
-    if (!options.yes) {
-      const rl = readline.createInterface({
-        input: process.stdin,
-        output: process.stdout,
-      });
-
-      const answer = await new Promise((resolve) => {
-        rl.question(chalk.red('Are you sure you want to delete these sessions? This cannot be undone. [y/N] '), resolve);
-      });
-      rl.close();
-
-      if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
-        console.log(chalk.gray('Cancelled.'));
+      if (sessions.length === 0) {
+        console.log(chalk.gray('No sessions found.'));
         return;
       }
-    }
 
-    console.log(chalk.blue('\nPruning stopped sessions...\n'));
-
-    for (const session of stoppedSessions) {
-      console.log(chalk.gray(`  Removing session ${session.sessionId}...`));
-      try {
-        // Clean up any docker resources
+      // Find stopped sessions
+      const stoppedSessions = [];
+      for (const session of sessions) {
         const envFile = resolve(session.path, '.env.session');
+        let running = false;
         if (existsSync(envFile)) {
-          try {
-            await docker.down({ cwd: session.path });
-          } catch {
-            // Ignore errors - containers might already be removed
-          }
+          running = await docker.isRunning({ cwd: session.path });
         }
-        // Remove worktree and branch
-        await removeWorktree(projectRoot, session.path, session.branch);
-        console.log(chalk.green(`  Session ${session.sessionId} removed.`));
-      } catch (error) {
-        console.log(chalk.yellow(`  Warning: Could not fully remove session ${session.sessionId}`));
+        if (!running) {
+          stoppedSessions.push(session);
+        }
       }
-    }
 
-    console.log(chalk.green(`\nPruned ${stoppedSessions.length} session(s).`));
+      if (stoppedSessions.length === 0) {
+        console.log(chalk.gray('No stopped sessions to prune.'));
+        return;
+      }
+
+      console.log(chalk.yellow(`\nFound ${stoppedSessions.length} stopped session(s) to prune:`));
+      for (const session of stoppedSessions) {
+        console.log(chalk.gray(`  - Session ${session.sessionId} (${session.branch})`));
+      }
+      console.log('');
+
+      // Confirm unless --yes flag provided
+      if (!options.yes) {
+        const rl = readline.createInterface({
+          input: process.stdin,
+          output: process.stdout,
+        });
+
+        const answer = await new Promise((resolve) => {
+          rl.question(chalk.red('Are you sure you want to delete these sessions? This cannot be undone. [y/N] '), resolve);
+        });
+        rl.close();
+
+        if (answer.toLowerCase() !== 'y' && answer.toLowerCase() !== 'yes') {
+          console.log(chalk.gray('Cancelled.'));
+          return;
+        }
+      }
+
+      console.log(chalk.blue('\nPruning stopped sessions...\n'));
+
+      for (const session of stoppedSessions) {
+        console.log(chalk.gray(`  Removing session ${session.sessionId}...`));
+        try {
+          // Clean up any docker resources
+          const envFile = resolve(session.path, '.env.session');
+          if (existsSync(envFile)) {
+            try {
+              await docker.down({ cwd: session.path });
+            } catch {
+              // Ignore errors - containers might already be removed
+            }
+          }
+          // Remove worktree and branch
+          await removeWorktree(projectRoot, session.path, session.branch);
+          console.log(chalk.green(`  Session ${session.sessionId} removed.`));
+        } catch (error) {
+          console.log(chalk.yellow(`  Warning: Could not fully remove session ${session.sessionId}`));
+        }
+      }
+
+      console.log(chalk.green(`\nPruned ${stoppedSessions.length} session(s).`));
+    } catch (error) {
+      handleGitRepoError(error);
+    }
   });
 
 program

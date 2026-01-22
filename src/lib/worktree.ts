@@ -1,6 +1,25 @@
 import { existsSync, rmSync } from 'node:fs';
 import { execa } from 'execa';
 
+export class NotAGitRepositoryError extends Error {
+  constructor() {
+    super('Not a git repository');
+    this.name = 'NotAGitRepositoryError';
+  }
+}
+
+export async function isGitRepository(path: string): Promise<boolean> {
+  try {
+    await execa('git', ['rev-parse', '--is-inside-work-tree'], {
+      cwd: path,
+      stdio: 'pipe',
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function branchExists(projectRoot: string, branchName: string): Promise<boolean> {
   try {
     await execa('git', ['rev-parse', '--verify', branchName], {
@@ -100,6 +119,10 @@ export async function listWorktrees(projectRoot: string): Promise<Array<{
   branch: string;
   commit: string;
 }>> {
+  if (!(await isGitRepository(projectRoot))) {
+    throw new NotAGitRepositoryError();
+  }
+
   const { stdout } = await execa('git', ['worktree', 'list', '--porcelain'], {
     cwd: projectRoot,
   });
