@@ -114,32 +114,27 @@ export async function removeWorktree(
   }
 }
 
-export async function listWorktrees(projectRoot: string): Promise<Array<{
+export interface Worktree {
   path: string;
   branch: string;
   commit: string;
-}>> {
-  if (!(await isGitRepository(projectRoot))) {
-    throw new NotAGitRepositoryError();
-  }
+}
 
-  const { stdout } = await execa('git', ['worktree', 'list', '--porcelain'], {
-    cwd: projectRoot,
-  });
-
-  const worktrees: Array<{ path: string; branch: string; commit: string }> = [];
-  let current: { path: string; branch: string; commit: string } | null = null;
+// Parse git worktree list --porcelain output
+export function parseWorktreeOutput(stdout: string): Worktree[] {
+  const worktrees: Worktree[] = [];
+  let current: Worktree | null = null;
 
   for (const line of stdout.split('\n')) {
     if (line.startsWith('worktree ')) {
       if (current) {
         worktrees.push(current);
       }
-      current = { path: line.replace('worktree ', ''), branch: '', commit: '' };
+      current = { path: line.slice(9), branch: '', commit: '' };
     } else if (line.startsWith('HEAD ') && current) {
-      current.commit = line.replace('HEAD ', '');
+      current.commit = line.slice(5);
     } else if (line.startsWith('branch ') && current) {
-      current.branch = line.replace('branch refs/heads/', '');
+      current.branch = line.slice(18); // 'branch refs/heads/'.length
     }
   }
 
@@ -150,24 +145,36 @@ export async function listWorktrees(projectRoot: string): Promise<Array<{
   return worktrees;
 }
 
-export async function getSessionWorktrees(projectRoot: string): Promise<Array<{
+export async function listWorktrees(projectRoot: string): Promise<Worktree[]> {
+  if (!(await isGitRepository(projectRoot))) {
+    throw new NotAGitRepositoryError();
+  }
+
+  const { stdout } = await execa('git', ['worktree', 'list', '--porcelain'], {
+    cwd: projectRoot,
+  });
+
+  return parseWorktreeOutput(stdout);
+}
+
+export interface SessionWorktree {
   sessionId: string;
   path: string;
   branch: string;
-}>> {
-  const worktrees = await listWorktrees(projectRoot);
+}
 
-  // Match session directories by path pattern: .../session-XXX
+// Filter worktrees to only session directories (pattern: .../session-XXX)
+export function filterSessionWorktrees(worktrees: Worktree[]): SessionWorktree[] {
   const sessionPattern = /\/session-(\d{3})$/;
 
-  return worktrees
-    .filter((wt) => sessionPattern.test(wt.path))
-    .map((wt) => {
-      const match = wt.path.match(sessionPattern);
-      return {
-        sessionId: match![1],
-        path: wt.path,
-        branch: wt.branch,
-      };
-    });
+  return worktrees.flatMap((wt) => {
+    const match = wt.path.match(sessionPattern);
+    if (!match) return [];
+    return [{ sessionId: match[1], path: wt.path, branch: wt.branch }];
+  });
+}
+
+export async function getSessionWorktrees(projectRoot: string): Promise<SessionWorktree[]> {
+  const worktrees = await listWorktrees(projectRoot);
+  return filterSessionWorktrees(worktrees);
 }

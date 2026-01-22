@@ -7,5 +7,11 @@ export {
   findNextSessionId,
   generateDefaultBranchName,
   isGitRepository,
-  NotAGitRepositoryError
+  NotAGitRepositoryError,
+  parseWorktreeOutput,
+  filterSessionWorktrees,
+  type Worktree,
+  type SessionWorktree,
 } from './lib/worktree.js';
+export { generateEnvContent, renderAppEnv } from './lib/env.js';
+export { formatPortsTable } from './lib/ports.js';
