@@ -1,0 +1,33 @@
+{
+  "name": "dev-session",
+  "version": "0.2.0",
+  "description": "Minimal CLI for isolated parallel development sessions",
+  "type": "module",
+  "bin": {
+    "dev-session": "./bin/dev-session.js"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsup src/index.ts src/commands/create.ts src/commands/destroy.ts src/commands/list.ts src/commands/claude.ts src/lib/config.ts src/lib/docker.ts src/lib/env.ts src/lib/ports.ts src/lib/worktree.ts --format esm --dts",
+    "dev": "tsup src/index.ts --format esm --dts --watch",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "chalk": "^5.3.0",
+    "commander": "^11.1.0",
+    "execa": "^8.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.10.0",
+    "tsup": "^8.0.1",
+    "typescript": "^5.3.2"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "files": [
+    "bin",
+    "dist"
+  ]
+}
