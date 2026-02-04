@@ -37,7 +37,7 @@ export function writeEnvFile(
 }
 
 // Render app-specific env template by substituting port variables
-export function renderAppEnv(
+function renderAppEnv(
   template: Record<string, string>,
   ports: Record<string, number>
 ): Record<string, string> {
@@ -45,9 +45,14 @@ export function renderAppEnv(
 
   for (const [key, value] of Object.entries(template)) {
     // Replace ${VAR_NAME} with actual port values
-    result[key] = value.replace(/\$\{(\w+)\}/g, (match, varName) => {
-      return varName in ports ? String(ports[varName]) : match;
-    });
+    let rendered = value;
+    for (const [portName, portValue] of Object.entries(ports)) {
+      rendered = rendered.replace(
+        new RegExp(`\\$\\{${portName}\\}`, 'g'),
+        String(portValue)
+      );
+    }
+    result[key] = rendered;
   }
 
   return result;

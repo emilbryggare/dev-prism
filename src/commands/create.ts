@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync } from 'node:fs';
-import { basename } from 'node:path';
+import { existsSync, mkdirSync, copyFileSync, readFileSync, writeFileSync } from 'node:fs';
+import { basename, join } from 'node:path';
 import chalk from 'chalk';
 import { execa } from 'execa';
 import { loadConfig, getSessionDir, getSessionsDir } from '../lib/config.js';
@@ -8,11 +8,26 @@ import { writeEnvFile, writeAppEnvFiles } from '../lib/env.js';
 import { createWorktree, findNextSessionId, generateDefaultBranchName } from '../lib/worktree.js';
 import * as docker from '../lib/docker.js';
 
+function updateEnvDatabaseUrl(envPath: string, newDbUrl: string): void {
+  if (!existsSync(envPath)) return;
+
+  let content = readFileSync(envPath, 'utf-8');
+  // Replace DATABASE_URL line if it exists
+  if (content.includes('DATABASE_URL=')) {
+    content = content.replace(/^DATABASE_URL=.*/m, `DATABASE_URL=${newDbUrl}`);
+  } else {
+    // Add it if it doesn't exist
+    content += `\nDATABASE_URL=${newDbUrl}\n`;
+  }
+  writeFileSync(envPath, content);
+}
+
 export interface CreateOptions {
   mode?: 'docker' | 'native';
   branch?: string;
   detach?: boolean; // default true, set false to stream logs after starting
   without?: string[]; // apps to exclude in docker mode
+  inPlace?: boolean; // run in current directory instead of creating a worktree
 }
 
 export async function createSession(
@@ -36,30 +51,61 @@ export async function createSession(
     process.exit(1);
   }
 
-  // Determine branch name
+  const inPlace = options.inPlace ?? false;
+
+  // Determine branch name (not used for in-place mode)
   const branchName = options.branch || generateDefaultBranchName(sessionId);
 
   const mode = options.mode || 'docker';
-  console.log(chalk.blue(`Creating session ${sessionId} (${mode} mode)...`));
-  console.log(chalk.gray(`Branch: ${branchName}`));
+  console.log(chalk.blue(`Creating session ${sessionId} (${mode} mode${inPlace ? ', in-place' : ''})...`));
+  if (!inPlace) {
+    console.log(chalk.gray(`Branch: ${branchName}`));
+  }
 
   // Calculate ports
   const ports = calculatePorts(config, sessionId);
   console.log(chalk.gray('\nPorts:'));
   console.log(chalk.gray(formatPortsTable(ports)));
 
-  // Ensure sessions directory exists
-  if (!existsSync(sessionsDir)) {
-    mkdirSync(sessionsDir, { recursive: true });
+  // Determine session directory
+  let sessionDir: string;
+
+  if (inPlace) {
+    // Use current directory
+    sessionDir = projectRoot;
+    console.log(chalk.blue('\nUsing current directory (in-place mode)...'));
+    console.log(chalk.green(`  Directory: ${sessionDir}`));
+  } else {
+    // Ensure sessions directory exists
+    if (!existsSync(sessionsDir)) {
+      mkdirSync(sessionsDir, { recursive: true });
+    }
+
+    // Get session directory
+    sessionDir = getSessionDir(config, projectRoot, sessionId);
+
+    // Create git worktree
+    console.log(chalk.blue('\nCreating git worktree...'));
+    await createWorktree(projectRoot, sessionDir, branchName);
+    console.log(chalk.green(`  Created: ${sessionDir}`));
+
+    // Copy .env files from source repo (if they exist) and update DATABASE_URL
+    const sessionDbUrl = `postgresql://postgres:postgres@localhost:${ports.POSTGRES_PORT}/postgres`;
+    const envFilesToCopy = [
+      'apps/convas-app/.env',
+      'packages/convas-db/.env',
+    ];
+    for (const envFile of envFilesToCopy) {
+      const srcPath = join(projectRoot, envFile);
+      const destPath = join(sessionDir, envFile);
+      if (existsSync(srcPath)) {
+        copyFileSync(srcPath, destPath);
+        // Update DATABASE_URL to use session's postgres port
+        updateEnvDatabaseUrl(destPath, sessionDbUrl);
+        console.log(chalk.green(`  Copied: ${envFile} (updated DATABASE_URL)`));
+      }
+    }
   }
-
-  // Get session directory
-  const sessionDir = getSessionDir(config, projectRoot, sessionId);
-
-  // Create git worktree
-  console.log(chalk.blue('\nCreating git worktree...'));
-  await createWorktree(projectRoot, sessionDir, branchName);
-  console.log(chalk.green(`  Created: ${sessionDir}`));
 
   // Write .env.session with ports (for docker-compose variable substitution)
   console.log(chalk.blue('\nGenerating .env.session...'));

@@ -1,25 +1,6 @@
 import { existsSync, rmSync } from 'node:fs';
 import { execa } from 'execa';
 
-export class NotAGitRepositoryError extends Error {
-  constructor() {
-    super('Not a git repository');
-    this.name = 'NotAGitRepositoryError';
-  }
-}
-
-export async function isGitRepository(path: string): Promise<boolean> {
-  try {
-    await execa('git', ['rev-parse', '--is-inside-work-tree'], {
-      cwd: path,
-      stdio: 'pipe',
-    });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function branchExists(projectRoot: string, branchName: string): Promise<boolean> {
   try {
     await execa('git', ['rev-parse', '--verify', branchName], {
@@ -114,27 +95,28 @@ export async function removeWorktree(
   }
 }
 
-export interface Worktree {
+export async function listWorktrees(projectRoot: string): Promise<Array<{
   path: string;
   branch: string;
   commit: string;
-}
+}>> {
+  const { stdout } = await execa('git', ['worktree', 'list', '--porcelain'], {
+    cwd: projectRoot,
+  });
 
-// Parse git worktree list --porcelain output
-export function parseWorktreeOutput(stdout: string): Worktree[] {
-  const worktrees: Worktree[] = [];
-  let current: Worktree | null = null;
+  const worktrees: Array<{ path: string; branch: string; commit: string }> = [];
+  let current: { path: string; branch: string; commit: string } | null = null;
 
   for (const line of stdout.split('\n')) {
     if (line.startsWith('worktree ')) {
       if (current) {
         worktrees.push(current);
       }
-      current = { path: line.slice(9), branch: '', commit: '' };
+      current = { path: line.replace('worktree ', ''), branch: '', commit: '' };
     } else if (line.startsWith('HEAD ') && current) {
-      current.commit = line.slice(5);
+      current.commit = line.replace('HEAD ', '');
     } else if (line.startsWith('branch ') && current) {
-      current.branch = line.slice(18); // 'branch refs/heads/'.length
+      current.branch = line.replace('branch refs/heads/', '');
     }
   }
 
@@ -145,36 +127,24 @@ export function parseWorktreeOutput(stdout: string): Worktree[] {
   return worktrees;
 }
 
-export async function listWorktrees(projectRoot: string): Promise<Worktree[]> {
-  if (!(await isGitRepository(projectRoot))) {
-    throw new NotAGitRepositoryError();
-  }
-
-  const { stdout } = await execa('git', ['worktree', 'list', '--porcelain'], {
-    cwd: projectRoot,
-  });
-
-  return parseWorktreeOutput(stdout);
-}
-
-export interface SessionWorktree {
+export async function getSessionWorktrees(projectRoot: string): Promise<Array<{
   sessionId: string;
   path: string;
   branch: string;
-}
+}>> {
+  const worktrees = await listWorktrees(projectRoot);
 
-// Filter worktrees to only session directories (pattern: .../session-XXX)
-export function filterSessionWorktrees(worktrees: Worktree[]): SessionWorktree[] {
+  // Match session directories by path pattern: .../session-XXX
   const sessionPattern = /\/session-(\d{3})$/;
 
-  return worktrees.flatMap((wt) => {
-    const match = wt.path.match(sessionPattern);
-    if (!match) return [];
-    return [{ sessionId: match[1], path: wt.path, branch: wt.branch }];
-  });
-}
-
-export async function getSessionWorktrees(projectRoot: string): Promise<SessionWorktree[]> {
-  const worktrees = await listWorktrees(projectRoot);
-  return filterSessionWorktrees(worktrees);
+  return worktrees
+    .filter((wt) => sessionPattern.test(wt.path))
+    .map((wt) => {
+      const match = wt.path.match(sessionPattern);
+      return {
+        sessionId: match![1],
+        path: wt.path,
+        branch: wt.branch,
+      };
+    });
 }
