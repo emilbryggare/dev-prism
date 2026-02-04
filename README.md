@@ -89,8 +89,8 @@ With base port 47000:
 
 | Service        | Session 001 | Session 002 | Session 003 |
 |----------------|-------------|-------------|-------------|
-| CONVAS_APP_PORT| 47100       | 47200       | 47300       |
-| CONVAS_WEB_PORT| 47101       | 47201       | 47301       |
+| APP_PORT       | 47100       | 47200       | 47300       |
+| WEB_PORT       | 47101       | 47201       | 47301       |
 | POSTGRES_PORT  | 47110       | 47210       | 47310       |
 | MAILPIT_SMTP   | 47111       | 47211       | 47311       |
 | MAILPIT_WEB    | 47112       | 47212       | 47312       |
@@ -183,7 +183,7 @@ SESSION_ID=001
 POSTGRES_PORT=47110
 MAILPIT_SMTP_PORT=47111
 MAILPIT_WEB_PORT=47112
-CONVAS_APP_PORT=47100
+APP_PORT=47100
 ```
 
 ## Portability

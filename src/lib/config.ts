@@ -10,6 +10,7 @@ export interface SessionConfig {
   ports: Record<string, number>; // Flat map of VAR_NAME -> offset
   appEnv?: Record<string, Record<string, string>>; // Optional app-specific env vars
   apps?: string[]; // Available app profiles for docker mode
+  envFiles?: string[]; // .env files to copy to session and update DATABASE_URL
   setup: string[];
 }
 

@@ -219,7 +219,7 @@ program
     const allApps = config.apps ?? ['app', 'web', 'widget'];
     const profileFlags = allApps.flatMap((p) => ['--profile', p]);
     // Explicitly list all services to stop (infrastructure + apps)
-    const allServices = ['postgres', 'mailpit', 'convas-app', 'convas-web', 'convas-widget'];
+    const allServices = ['postgres', 'mailpit', ...allApps];
 
     const { execa } = await import('execa');
     for (const session of runningSessions) {

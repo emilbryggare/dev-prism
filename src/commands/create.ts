@@ -91,10 +91,7 @@ export async function createSession(
 
     // Copy .env files from source repo (if they exist) and update DATABASE_URL
     const sessionDbUrl = `postgresql://postgres:postgres@localhost:${ports.POSTGRES_PORT}/postgres`;
-    const envFilesToCopy = [
-      'apps/convas-app/.env',
-      'packages/convas-db/.env',
-    ];
+    const envFilesToCopy = config.envFiles ?? [];
     for (const envFile of envFilesToCopy) {
       const srcPath = join(projectRoot, envFile);
       const destPath = join(sessionDir, envFile);
