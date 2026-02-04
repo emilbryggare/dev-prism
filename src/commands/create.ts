@@ -122,7 +122,7 @@ export async function createSession(
   console.log(chalk.blue('\nStarting Docker services...'));
   let profiles: string[] | undefined;
   if (mode === 'docker') {
-    const allApps = config.apps ?? ['app', 'web', 'widget'];
+    const allApps = config.apps ?? [];
     const excludeApps = options.without ?? [];
     profiles = allApps.filter((app) => !excludeApps.includes(app));
     if (excludeApps.length > 0) {

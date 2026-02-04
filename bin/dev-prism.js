@@ -115,7 +115,7 @@ program
     const sessionDir = getSessionDir(config, projectRoot, sessionId);
     let profiles;
     if (options.mode === 'docker') {
-      const allApps = config.apps ?? ['app', 'web', 'widget'];
+      const allApps = config.apps ?? [];
       const excludeApps = options.without ?? [];
       profiles = allApps.filter((app) => !excludeApps.includes(app));
     }
@@ -157,7 +157,7 @@ program
     const sessionDir = getSessionDir(config, projectRoot, sessionId);
     let profileFlags = [];
     if (options.mode === 'docker') {
-      const allApps = config.apps ?? ['app', 'web', 'widget'];
+      const allApps = config.apps ?? [];
       const excludeApps = options.without ?? [];
       const profiles = allApps.filter((app) => !excludeApps.includes(app));
       profileFlags = profiles.flatMap((p) => ['--profile', p]);
@@ -216,7 +216,7 @@ program
     console.log(chalk.blue(`Stopping ${runningSessions.length} running session(s)...\n`));
 
     // Get all app profiles and service names to ensure we stop everything
-    const allApps = config.apps ?? ['app', 'web', 'widget'];
+    const allApps = config.apps ?? [];
     const profileFlags = allApps.flatMap((p) => ['--profile', p]);
     // Explicitly list all services to stop (infrastructure + apps)
     const allServices = ['postgres', 'mailpit', ...allApps];

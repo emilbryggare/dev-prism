@@ -97,28 +97,42 @@ With base port 47000:
 
 ## Configuration
 
-### session.config.mjs (minimal)
+### session.config.mjs
 
 ```javascript
 export default {
+  // Required
   portBase: 47000,
   sessionsDir: '../my-project-sessions',
 
   // Port offsets - become env vars for docker-compose
+  // Formula: portBase + (sessionId * 100) + offset
   ports: {
-    POSTGRES_PORT: 10,
-    REDIS_PORT: 11,
-    APP_PORT: 0,
+    APP_PORT: 0,        // 47100, 47200, 47300...
+    WEB_PORT: 1,        // 47101, 47201, 47301...
+    POSTGRES_PORT: 10,  // 47110, 47210, 47310...
+    REDIS_PORT: 11,     // 47111, 47211, 47311...
   },
 
-  // Optional: app-specific env for CLI commands from host
+  // Docker Compose profiles for app containers (used in docker mode)
+  // These match service names with `profiles: ["app-name"]` in docker-compose
+  apps: ['app', 'web'],
+
+  // .env files to copy to session worktree (DATABASE_URL auto-updated)
+  envFiles: [
+    'apps/my-app/.env',
+    'packages/db/.env',
+  ],
+
+  // Commands to run after session creation
+  setup: ['pnpm install', 'pnpm db:push'],
+
+  // Optional: app-specific env for CLI commands from host (native mode)
   appEnv: {
     'apps/my-app': {
       DATABASE_URL: 'postgresql://postgres:postgres@localhost:${POSTGRES_PORT}/postgres',
     },
   },
-
-  setup: ['pnpm install', 'pnpm db:push'],
 };
 ```
 
