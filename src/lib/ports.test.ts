@@ -55,7 +55,7 @@ describe('formatPortsTable', () => {
   it('formats ports as indented lines', () => {
     const ports = { POSTGRES_PORT: 47110, REDIS_PORT: 47111 };
     const result = formatPortsTable(ports);
-    expect(result).toBe('  POSTGRES_PORT: 47110\n  REDIS_PORT: 47111');
+    expect(result).toBe('  POSTGRES_PORT: http://localhost:47110\n  REDIS_PORT: http://localhost:47111');
   });
 
   it('handles empty ports', () => {
@@ -65,6 +65,6 @@ describe('formatPortsTable', () => {
 
   it('handles single port', () => {
     const result = formatPortsTable({ PORT: 3000 });
-    expect(result).toBe('  PORT: 3000');
+    expect(result).toBe('  PORT: http://localhost:3000');
   });
 });

@@ -1,4 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import Database from 'better-sqlite3';
+import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { SessionStore } from './store.js';
 
 describe('SessionStore', () => {
@@ -56,7 +60,7 @@ describe('SessionStore', () => {
       expect(row.in_place).toBe(1);
     });
 
-    it('rejects duplicate session_id + project_root', () => {
+    it('rejects duplicate session_id', () => {
       store.insert({
         sessionId: '001',
         projectRoot: '/projects/my-app',
@@ -72,20 +76,20 @@ describe('SessionStore', () => {
       ).toThrow(/UNIQUE constraint/);
     });
 
-    it('allows same session_id in different projects', () => {
+    it('rejects same session_id in different projects', () => {
       store.insert({
         sessionId: '001',
         projectRoot: '/projects/app-a',
         sessionDir: '/sessions/a/session-001',
       });
 
-      const row = store.insert({
-        sessionId: '001',
-        projectRoot: '/projects/app-b',
-        sessionDir: '/sessions/b/session-001',
-      });
-
-      expect(row.session_id).toBe('001');
+      expect(() =>
+        store.insert({
+          sessionId: '001',
+          projectRoot: '/projects/app-b',
+          sessionDir: '/sessions/b/session-001',
+        })
+      ).toThrow(/UNIQUE constraint/);
     });
   });
 
@@ -115,7 +119,7 @@ describe('SessionStore', () => {
   describe('listAll', () => {
     it('returns all active sessions across projects', () => {
       store.insert({ sessionId: '001', projectRoot: '/a', sessionDir: '/s/a/001' });
-      store.insert({ sessionId: '001', projectRoot: '/b', sessionDir: '/s/b/001' });
+      store.insert({ sessionId: '002', projectRoot: '/b', sessionDir: '/s/b/002' });
 
       const sessions = store.listAll();
       expect(sessions).toHaveLength(2);
@@ -158,13 +162,13 @@ describe('SessionStore', () => {
   });
 
   describe('getUsedSessionIds', () => {
-    it('returns set of active session ids', () => {
-      store.insert({ sessionId: '001', projectRoot: '/p', sessionDir: '/s/001' });
-      store.insert({ sessionId: '003', projectRoot: '/p', sessionDir: '/s/003' });
-      store.insert({ sessionId: '005', projectRoot: '/p', sessionDir: '/s/005' });
-      store.markDestroyed('/p', '003');
+    it('returns all active session ids across projects', () => {
+      store.insert({ sessionId: '001', projectRoot: '/a', sessionDir: '/s/a/001' });
+      store.insert({ sessionId: '003', projectRoot: '/b', sessionDir: '/s/b/003' });
+      store.insert({ sessionId: '005', projectRoot: '/a', sessionDir: '/s/a/005' });
+      store.markDestroyed('/b', '003');
 
-      const ids = store.getUsedSessionIds('/p');
+      const ids = store.getUsedSessionIds();
       expect(ids).toEqual(new Set(['001', '005']));
     });
   });
@@ -189,6 +193,58 @@ describe('SessionStore', () => {
       store.markDestroyed('/p', '001');
 
       expect(store.markDestroyed('/p', '001')).toBe(false);
+    });
+  });
+
+  describe('migrate', () => {
+    it('migrates old schema with composite unique constraint to global unique', () => {
+      const dir = join(tmpdir(), `dev-prism-test-${Date.now()}`);
+      mkdirSync(dir, { recursive: true });
+      const dbPath = join(dir, 'test.db');
+
+      try {
+        // Create a DB with the old schema (composite UNIQUE)
+        const oldDb = new Database(dbPath);
+        oldDb.exec(`
+          CREATE TABLE sessions (
+            id            INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id    TEXT NOT NULL,
+            project_root  TEXT NOT NULL,
+            session_dir   TEXT NOT NULL,
+            branch        TEXT NOT NULL DEFAULT '',
+            mode          TEXT NOT NULL DEFAULT 'docker',
+            in_place      INTEGER NOT NULL DEFAULT 0,
+            created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+            destroyed_at  TEXT,
+            UNIQUE(session_id, project_root)
+          );
+        `);
+        // Insert duplicate session IDs across projects (allowed by old schema)
+        oldDb.exec(`
+          INSERT INTO sessions (session_id, project_root, session_dir) VALUES ('001', '/a', '/s/a/001');
+          INSERT INTO sessions (session_id, project_root, session_dir) VALUES ('001', '/b', '/s/b/001');
+          INSERT INTO sessions (session_id, project_root, session_dir) VALUES ('002', '/a', '/s/a/002');
+        `);
+        oldDb.close();
+
+        // Open with SessionStore which should trigger migration
+        const store2 = new SessionStore(dbPath);
+        const sessions = store2.listAll();
+        // Duplicate 001 should be deduplicated — one kept, one dropped
+        const ids = sessions.map((s) => s.session_id);
+        expect(ids).toContain('001');
+        expect(ids).toContain('002');
+        expect(ids.filter((id) => id === '001')).toHaveLength(1);
+
+        // New inserts with duplicate session_id should be rejected
+        expect(() =>
+          store2.insert({ sessionId: '002', projectRoot: '/b', sessionDir: '/s/b/002' })
+        ).toThrow(/UNIQUE constraint/);
+
+        store2.close();
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
     });
   });
 
