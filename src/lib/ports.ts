@@ -22,7 +22,7 @@ export function calculatePorts(
 export function formatPortsTable(ports: Record<string, number>): string {
   const lines: string[] = [];
   for (const [name, port] of Object.entries(ports)) {
-    lines.push(`  ${name}: ${port}`);
+    lines.push(`  ${name}: http://localhost:${port}`);
   }
   return lines.join('\n');
 }

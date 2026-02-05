@@ -73,15 +73,10 @@ function printSessionStatus(status: SessionStatus): void {
   console.log(chalk.gray(`  Path: ${status.path}`));
   console.log(chalk.gray(`  Branch: ${status.branch}`));
 
-  // Print ports grouped by type
+  // Print all ports
   console.log(chalk.gray('  Ports:'));
   for (const [name, port] of Object.entries(status.ports)) {
-    const isApp = name.includes('APP') || name.includes('WEB') || name.includes('WIDGET');
-    if (isApp) {
-      console.log(chalk.gray(`    ${name}: http://localhost:${port}`));
-    } else {
-      console.log(chalk.gray(`    ${name}: ${port}`));
-    }
+    console.log(chalk.cyan(`    ${name}: http://localhost:${port}`));
   }
 
   console.log('');

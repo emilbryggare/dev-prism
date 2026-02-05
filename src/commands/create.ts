@@ -202,12 +202,10 @@ export async function createSession(
     console.log(chalk.gray('\nNative mode - run apps with: pnpm dev'));
   }
 
-  // Print access URLs
-  console.log(chalk.gray('\nURLs:'));
+  // Print all ports
+  console.log(chalk.gray('\nPorts:'));
   for (const [name, port] of Object.entries(ports)) {
-    if (name.includes('APP') || name.includes('WEB') || name.includes('WIDGET')) {
-      console.log(chalk.cyan(`  ${name}: http://localhost:${port}`));
-    }
+    console.log(chalk.cyan(`  ${name}: http://localhost:${port}`));
   }
 
   // If not detaching, stream logs from all services

@@ -31,16 +31,7 @@ export async function showInfo(cwd: string): Promise<void> {
   console.log(chalk.gray('\nPorts:'));
   for (const [key, value] of Object.entries(env)) {
     if (key.includes('PORT')) {
-      console.log(chalk.gray(`  ${key}: ${value}`));
-    }
-  }
-
-  console.log(chalk.gray('\nURLs:'));
-  for (const [key, value] of Object.entries(env)) {
-    if (key.includes('APP') || key.includes('WEB') || key.includes('WIDGET')) {
-      if (key.includes('PORT')) {
-        console.log(chalk.cyan(`  ${key.replace('_PORT', '')}: http://localhost:${value}`));
-      }
+      console.log(chalk.cyan(`  ${key}: http://localhost:${value}`));
     }
   }
   console.log('');
