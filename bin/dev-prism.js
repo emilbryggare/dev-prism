@@ -17,7 +17,7 @@ const program = new Command();
 program
   .name('dev-prism')
   .description('CLI tool for managing isolated parallel development sessions')
-  .version('0.2.0');
+  .version('0.3.0');
 
 program
   .command('create [sessionId]')

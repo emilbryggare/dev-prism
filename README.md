@@ -17,10 +17,13 @@ All Docker configuration lives in `docker-compose.session.yml` in your project -
 
 ## Features
 
-- **Git worktrees** for isolated working directories
+- **Git worktrees** for isolated working directories (or in-place mode)
 - **Docker Compose** handles all container orchestration
-- **Unique ports** per session (calculated from session ID)
+- **Unique ports** per session (calculated from session ID, displayed as clickable URLs)
+- **Auto-assign** session IDs or choose your own
+- **SQLite tracking** — all sessions stored in a local database
 - **Two modes**: Docker (apps in containers) or Native (apps run locally)
+- **Claude Code integration** built-in (`dev-prism claude`)
 - **Portable**: Works with any project
 
 ## Installation
@@ -36,17 +39,27 @@ pnpm add -D dev-prism
 ### Create a session
 
 ```bash
-# Docker mode (default) - apps run in containers
+# Auto-assign session ID
+dev-prism create
+
+# Explicit session ID
 dev-prism create 001
 
+# Custom branch name
+dev-prism create --branch feature/my-feature
+
 # Native mode - only infrastructure in Docker, apps run via pnpm dev
-dev-prism create 001 --mode=native
+dev-prism create --mode native
+
+# Exclude specific apps from Docker
+dev-prism create --without web,widget
 
 # In-place mode - use current directory instead of creating worktree
-dev-prism create 001 --in-place
-```
+dev-prism create --in-place
 
-**Note:** In-place sessions are not shown in `dev-prism list` (which only lists worktree-based sessions). Use `dev-prism info` from within an in-place session directory to see its details.
+# Stream logs after creation instead of detaching
+dev-prism create --no-detach
+```
 
 ### List sessions
 
@@ -74,11 +87,20 @@ dev-prism stop-all   # Stop all sessions
 dev-prism logs 001
 ```
 
-### Destroy a session
+### Cleanup
 
 ```bash
 dev-prism destroy 001     # Destroy specific session
 dev-prism destroy --all   # Destroy all sessions
+dev-prism prune           # Remove all stopped sessions
+dev-prism prune -y        # Skip confirmation
+```
+
+### Claude Code integration
+
+```bash
+dev-prism claude          # Install Claude Code skill + CLAUDE.md
+dev-prism claude --force  # Overwrite existing files
 ```
 
 ## Port Allocation
@@ -171,9 +193,11 @@ services:
 
 ## How It Works
 
-1. **Create session**: `dev-prism create 001`
-   - Creates git worktree at `../project-sessions/session-001`
+1. **Create session**: `dev-prism create`
+   - Auto-assigns next available session ID (or use explicit ID)
+   - Creates git worktree at `../project-sessions/session-001` (or uses current dir with `--in-place`)
    - Generates `.env.session` with calculated ports
+   - Records session in local SQLite database
    - Runs `docker compose --env-file .env.session up -d`
    - Runs setup commands
 
@@ -181,6 +205,8 @@ services:
 
 3. **Docker mode** (`--profile apps`): All services including apps run in containers
 4. **Native mode**: Only infrastructure runs; apps use `pnpm dev` with `.env.session`
+
+All session state is tracked in a SQLite database (`~/.dev-prism/sessions.db`), making both worktree and in-place sessions first-class citizens across all commands.
 
 ## Generated Files
 
@@ -207,4 +233,4 @@ To use in another project:
 1. Install: `pnpm add -D dev-prism`
 2. Create `session.config.mjs` with port offsets
 3. Create `docker-compose.session.yml` with `${VAR}` placeholders
-4. Run `dev-prism create 001`
+4. Run `dev-prism create`
