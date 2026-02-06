@@ -17,19 +17,19 @@ const program = new Command();
 program
   .name('dev-prism')
   .description('CLI tool for managing isolated parallel development sessions')
-  .version('0.4.0');
+  .version('0.6.0');
 
 program
-  .command('create [sessionId]')
+  .command('create')
   .description('Create a new isolated development session')
   .option('-m, --mode <mode>', 'App mode: docker (default) or native', 'docker')
-  .option('-b, --branch <branch>', 'Git branch name (default: session/YYYY-MM-DD/XXX)')
+  .option('-b, --branch <branch>', 'Git branch name (default: session/TIMESTAMP)')
   .option('-W, --without <apps>', 'Exclude apps (comma-separated: app,web,widget)', (val) => val.split(','))
   .option('--no-detach', 'Stream container logs after starting (default: detach)')
   .option('--in-place', 'Run in current directory instead of creating a worktree')
-  .action(async (sessionId, options) => {
+  .action(async (options) => {
     const projectRoot = process.cwd();
-    await createSession(projectRoot, sessionId, {
+    await createSession(projectRoot, undefined, {
       mode: options.mode,
       branch: options.branch,
       detach: options.detach,
@@ -39,21 +39,19 @@ program
   });
 
 program
-  .command('destroy [sessionId]')
-  .description('Destroy a development session')
+  .command('destroy [directory]')
+  .description('Destroy a development session (defaults to current directory)')
   .option('-a, --all', 'Destroy all sessions')
-  .action(async (sessionId, options) => {
-    const projectRoot = process.cwd();
-    await destroySession(projectRoot, sessionId, { all: options.all });
+  .action(async (directory, options) => {
+    const workingDir = directory || process.cwd();
+    await destroySession(workingDir, { all: options.all });
   });
 
 program
   .command('list')
   .description('List all active development sessions')
-  .option('-a, --all', 'Show sessions across all projects')
-  .action(async (options) => {
-    const projectRoot = process.cwd();
-    await listSessions(projectRoot, { all: options.all });
+  .action(async () => {
+    await listSessions();
   });
 
 program
@@ -64,35 +62,35 @@ program
   });
 
 program
-  .command('start <sessionId>')
-  .description('Start Docker services for a session')
+  .command('start [directory]')
+  .description('Start Docker services for a session (defaults to current directory)')
   .option('-m, --mode <mode>', 'App mode: docker or native', 'docker')
   .option('-W, --without <apps>', 'Exclude apps (comma-separated: app,web,widget)', (val) => val.split(','))
-  .action(async (sessionId, options) => {
-    const projectRoot = process.cwd();
-    await startSession(projectRoot, sessionId, {
+  .action(async (directory, options) => {
+    const workingDir = directory || process.cwd();
+    await startSession(workingDir, {
       mode: options.mode,
       without: options.without,
     });
   });
 
 program
-  .command('stop <sessionId>')
-  .description('Stop Docker services for a session (without destroying)')
-  .action(async (sessionId) => {
-    const projectRoot = process.cwd();
-    await stopSession(projectRoot, sessionId);
+  .command('stop [directory]')
+  .description('Stop Docker services for a session (defaults to current directory)')
+  .action(async (directory) => {
+    const workingDir = directory || process.cwd();
+    await stopSession(workingDir);
   });
 
 program
-  .command('logs <sessionId>')
-  .description('Stream logs from a session\'s Docker services')
+  .command('logs [directory]')
+  .description('Stream logs from a session\'s Docker services (defaults to current directory)')
   .option('-m, --mode <mode>', 'App mode: docker or native', 'docker')
   .option('-W, --without <apps>', 'Exclude apps (comma-separated: app,web,widget)', (val) => val.split(','))
   .option('-n, --tail <lines>', 'Number of lines to show from the end', '50')
-  .action(async (sessionId, options) => {
-    const projectRoot = process.cwd();
-    await streamLogs(projectRoot, sessionId, {
+  .action(async (directory, options) => {
+    const workingDir = directory || process.cwd();
+    await streamLogs(workingDir, {
       mode: options.mode,
       without: options.without,
       tail: options.tail,
@@ -103,8 +101,7 @@ program
   .command('stop-all')
   .description('Stop all running sessions (preserves data)')
   .action(async () => {
-    const projectRoot = process.cwd();
-    await stopAllSessions(projectRoot);
+    await stopAllSessions();
   });
 
 program
@@ -112,8 +109,7 @@ program
   .description('Remove all stopped sessions (destroys data)')
   .option('-y, --yes', 'Skip confirmation prompt')
   .action(async (options) => {
-    const projectRoot = process.cwd();
-    await pruneSessions(projectRoot, { yes: options.yes });
+    await pruneSessions({ yes: options.yes });
   });
 
 program
@@ -137,21 +133,21 @@ ${chalk.bold('USAGE')}
   dev-prism <command> [options]
 
 ${chalk.bold('COMMANDS')}
-  ${chalk.cyan('create')} [id]      Create a new session (auto-assigns ID if not provided)
-  ${chalk.cyan('destroy')} <id>     Destroy a specific session
-  ${chalk.cyan('list')}             List all sessions and their status
+  ${chalk.cyan('create')}           Create a new session
+  ${chalk.cyan('destroy')} [dir]    Destroy a session (defaults to current directory)
+  ${chalk.cyan('list')}             List all active sessions
   ${chalk.cyan('info')}             Show session info for current directory
-  ${chalk.cyan('start')} <id>       Start Docker services for a stopped session
-  ${chalk.cyan('stop')} <id>        Stop Docker services (preserves data)
+  ${chalk.cyan('start')} [dir]      Start Docker services (defaults to current directory)
+  ${chalk.cyan('stop')} [dir]       Stop Docker services (defaults to current directory)
   ${chalk.cyan('stop-all')}         Stop all running sessions
-  ${chalk.cyan('logs')} <id>        Stream logs from a session
-  ${chalk.cyan('prune')}            Remove all stopped sessions
+  ${chalk.cyan('logs')} [dir]       Stream logs (defaults to current directory)
+  ${chalk.cyan('prune')}            Remove all stopped session directories
 
 ${chalk.bold('EXAMPLES')}
-  ${chalk.gray('# Create a new session (auto-assigns next available ID)')}
+  ${chalk.gray('# Create a new session with worktree')}
   $ dev-prism create
 
-  ${chalk.gray('# Create session with specific branch')}
+  ${chalk.gray('# Create session with specific branch name')}
   $ dev-prism create --branch feature/my-feature
 
   ${chalk.gray('# Create session in native mode (apps run on host)')}
@@ -166,11 +162,17 @@ ${chalk.bold('EXAMPLES')}
   ${chalk.gray('# Check session status in current directory')}
   $ dev-prism info
 
-  ${chalk.gray('# Stop all running sessions before switching context')}
+  ${chalk.gray('# Stop session in current directory')}
+  $ dev-prism stop
+
+  ${chalk.gray('# Stop all running sessions')}
   $ dev-prism stop-all
 
-  ${chalk.gray('# Clean up old stopped sessions')}
+  ${chalk.gray('# Clean up old stopped session directories')}
   $ dev-prism prune
+
+  ${chalk.gray('# Destroy session in current directory')}
+  $ dev-prism destroy
 
   ${chalk.gray('# Destroy all sessions')}
   $ dev-prism destroy --all

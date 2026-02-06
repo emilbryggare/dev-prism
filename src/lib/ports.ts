@@ -1,18 +1,14 @@
-import type { SessionConfig } from './config.js';
+import type { PortMapping } from './docker-inspect.js';
 
-// Calculate all ports from config offsets
-// Returns a flat map of VAR_NAME -> actual port number
-export function calculatePorts(
-  config: SessionConfig,
-  sessionId: string
-): Record<string, number> {
-  const sessionNum = parseInt(sessionId, 10);
-  const basePort = config.portBase + sessionNum * 100;
-
+// Extract ports from Docker container inspection
+// Returns a map of service_INTERNAL_PORT -> external port
+export function extractPorts(portMappings: PortMapping[]): Record<string, number> {
   const ports: Record<string, number> = {};
 
-  for (const [name, offset] of Object.entries(config.ports)) {
-    ports[name] = basePort + offset;
+  for (const mapping of portMappings) {
+    // Use uppercase service name + _PORT as env var name
+    const envVarName = `${mapping.service.toUpperCase()}_PORT`;
+    ports[envVarName] = mapping.externalPort;
   }
 
   return ports;

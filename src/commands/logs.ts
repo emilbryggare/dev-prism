@@ -1,7 +1,9 @@
 import chalk from 'chalk';
 import { execa } from 'execa';
 import { loadConfig } from '../lib/config.js';
-import { SessionStore } from '../lib/store.js';
+import { getSession } from '../lib/session.js';
+import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 
 export interface LogsOptions {
   mode?: string;
@@ -10,24 +12,27 @@ export interface LogsOptions {
 }
 
 export async function streamLogs(
-  projectRoot: string,
-  sessionId: string,
+  workingDir: string,
   options: LogsOptions
 ): Promise<void> {
-  const config = await loadConfig(projectRoot);
-
-  const store = new SessionStore();
-  let sessionDir: string;
-  try {
-    const session = store.findSession(projectRoot, sessionId);
-    if (!session) {
-      console.error(chalk.red(`Error: Session ${sessionId} not found.`));
-      process.exit(1);
-    }
-    sessionDir = session.session_dir;
-  } finally {
-    store.close();
+  const session = await getSession(workingDir);
+  if (!session) {
+    console.error(chalk.red(`Error: No session found in ${workingDir}`));
+    process.exit(1);
   }
+
+  // Find project root by looking for config file
+  let projectRoot = workingDir;
+  for (let i = 0; i < 5; i++) {
+    const configPath = resolve(projectRoot, 'session.config.mjs');
+    const altConfigPath = resolve(projectRoot, 'session.config.js');
+    if (existsSync(configPath) || existsSync(altConfigPath)) {
+      break;
+    }
+    projectRoot = resolve(projectRoot, '..');
+  }
+
+  const config = await loadConfig(projectRoot);
 
   let profileFlags: string[] = [];
   if (options.mode === 'docker') {
@@ -39,13 +44,16 @@ export async function streamLogs(
 
   const args = [
     'compose',
-    '-f', 'docker-compose.session.yml',
-    '--env-file', '.env.session',
+    '-f',
+    'docker-compose.session.yml',
+    '--env-file',
+    '.env.session',
     ...profileFlags,
     'logs',
     '-f',
-    '--tail', options.tail ?? '50',
+    '--tail',
+    options.tail ?? '50',
   ];
 
-  await execa('docker', args, { cwd: sessionDir, stdio: 'inherit' });
+  await execa('docker', args, { cwd: workingDir, stdio: 'inherit' });
 }

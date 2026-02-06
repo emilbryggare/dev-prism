@@ -2,18 +2,18 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
 import type { SessionConfig } from './config.js';
 
-// Generate .env.session content from calculated ports
+// Generate .env.session content from discovered ports
 export function generateEnvContent(
-  sessionId: string,
+  workingDir: string,
   ports: Record<string, number>,
   projectName: string
 ): string {
   const lines = [
     `# Auto-generated session environment`,
-    `SESSION_ID=${sessionId}`,
-    `COMPOSE_PROJECT_NAME=${projectName}-${sessionId}`,
+    `SESSION_DIR=${workingDir}`,
+    `COMPOSE_PROJECT_NAME=${projectName}`,
     '',
-    '# Ports (used by docker-compose.session.yml)',
+    '# Discovered ports from running containers',
   ];
 
   for (const [name, port] of Object.entries(ports)) {
@@ -25,13 +25,12 @@ export function generateEnvContent(
 
 // Write the main .env.session file for docker-compose
 export function writeEnvFile(
-  sessionDir: string,
-  sessionId: string,
+  workingDir: string,
   ports: Record<string, number>,
-  projectName: string
+  composeProjectName: string
 ): string {
-  const content = generateEnvContent(sessionId, ports, projectName);
-  const filePath = resolve(sessionDir, '.env.session');
+  const content = generateEnvContent(workingDir, ports, composeProjectName);
+  const filePath = resolve(workingDir, '.env.session');
   writeFileSync(filePath, content, 'utf-8');
   return filePath;
 }
@@ -61,8 +60,7 @@ export function renderAppEnv(
 // Write app-specific .env.session files (for CLI commands from host)
 export function writeAppEnvFiles(
   config: SessionConfig,
-  sessionDir: string,
-  sessionId: string,
+  workingDir: string,
   ports: Record<string, number>
 ): string[] {
   if (!config.appEnv) return [];
@@ -72,13 +70,13 @@ export function writeAppEnvFiles(
   for (const [appPath, template] of Object.entries(config.appEnv)) {
     const env = renderAppEnv(template, ports);
 
-    const lines = [`# Auto-generated for session ${sessionId}`, `SESSION_ID=${sessionId}`];
+    const lines = [`# Auto-generated for session in ${workingDir}`, `SESSION_DIR=${workingDir}`];
     for (const [key, value] of Object.entries(env)) {
       lines.push(`${key}=${value}`);
     }
 
     const content = lines.join('\n') + '\n';
-    const envFilePath = resolve(sessionDir, appPath, '.env.session');
+    const envFilePath = resolve(workingDir, appPath, '.env.session');
     mkdirSync(dirname(envFilePath), { recursive: true });
     writeFileSync(envFilePath, content, 'utf-8');
     writtenFiles.push(envFilePath);

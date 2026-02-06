@@ -10,16 +10,16 @@ describe('generateDefaultBranchName', () => {
     vi.useRealTimers();
   });
 
-  it('generates branch name with date and session ID', () => {
-    vi.setSystemTime(new Date('2024-03-15'));
-    const result = generateDefaultBranchName('001');
-    expect(result).toBe('session/2024-03-15/001');
+  it('generates branch name with timestamp', () => {
+    vi.setSystemTime(new Date('2024-03-15T14:30:00Z'));
+    const result = generateDefaultBranchName();
+    expect(result).toMatch(/^session\/2024-03-15T14-30-/);
   });
 
-  it('includes session ID in branch name', () => {
-    vi.setSystemTime(new Date('2024-01-01'));
-    const result = generateDefaultBranchName('042');
-    expect(result).toBe('session/2024-01-01/042');
+  it('includes ISO timestamp in branch name', () => {
+    vi.setSystemTime(new Date('2024-01-01T00:00:00Z'));
+    const result = generateDefaultBranchName();
+    expect(result).toMatch(/^session\/2024-01-01T00-00-/);
   });
 });
 
