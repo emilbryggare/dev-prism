@@ -1,38 +1,36 @@
-import { existsSync, readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
 import chalk from 'chalk';
-import * as docker from '../lib/docker.js';
+import { getSession } from '../lib/session.js';
 
 export async function showInfo(cwd: string): Promise<void> {
-  const envFile = resolve(cwd, '.env.session');
-  if (!existsSync(envFile)) {
-    console.log(chalk.yellow('No .env.session found in current directory.'));
+  const session = await getSession(cwd);
+
+  if (!session) {
+    console.log(chalk.yellow('No session running in this directory.'));
     console.log(chalk.gray('Run `dev-prism create --in-place` to create a session here.'));
     process.exit(1);
   }
 
-  // Parse .env.session
-  const envContent = readFileSync(envFile, 'utf-8');
-  const env: Record<string, string> = {};
-  for (const line of envContent.split('\n')) {
-    const match = line.match(/^([^=]+)=(.*)$/);
-    if (match) {
-      env[match[1]] = match[2];
+  console.log(chalk.blue(`\nSession`));
+  console.log(chalk.gray(`Directory: ${session.workingDir}`));
+  console.log(
+    session.running ? chalk.green('Status: running') : chalk.yellow('Status: stopped')
+  );
+
+  if (session.containers.length > 0) {
+    console.log(chalk.gray(`\nContainers (${session.containers.length}):`));
+    for (const container of session.containers) {
+      const serviceName = container.labels['dev-prism.service'] || container.name;
+      const state = container.state === 'running' ? chalk.green('●') : chalk.gray('○');
+      console.log(`  ${state} ${serviceName}`);
     }
   }
 
-  const sessionId = env.SESSION_ID || 'unknown';
-  const running = await docker.isRunning({ cwd });
-
-  console.log(chalk.blue(`\nSession ${sessionId}`));
-  console.log(chalk.gray(`Directory: ${cwd}`));
-  console.log(running ? chalk.green('Status: running') : chalk.yellow('Status: stopped'));
-
-  console.log(chalk.gray('\nPorts:'));
-  for (const [key, value] of Object.entries(env)) {
-    if (key.includes('PORT')) {
-      console.log(chalk.cyan(`  ${key}: http://localhost:${value}`));
+  if (session.ports.length > 0) {
+    console.log(chalk.gray('\nPorts:'));
+    for (const port of session.ports) {
+      console.log(chalk.cyan(`  ${port.service}: http://localhost:${port.externalPort}`));
     }
   }
+
   console.log('');
 }

@@ -2,11 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { generateEnvContent, renderAppEnv } from './env.js';
 
 describe('generateEnvContent', () => {
-  it('generates env file content with session info and ports', () => {
-    const content = generateEnvContent('001', { POSTGRES_PORT: 47110 }, 'myproject');
+  it('generates env file content with working dir and ports', () => {
+    const content = generateEnvContent('/path/to/session', { POSTGRES_PORT: 47110 }, 'myproject');
 
-    expect(content).toContain('SESSION_ID=001');
-    expect(content).toContain('COMPOSE_PROJECT_NAME=myproject-001');
+    expect(content).toContain('SESSION_DIR=/path/to/session');
+    expect(content).toContain('COMPOSE_PROJECT_NAME=myproject');
     expect(content).toContain('POSTGRES_PORT=47110');
   });
 
@@ -16,7 +16,7 @@ describe('generateEnvContent', () => {
       REDIS_PORT: 47111,
       APP_PORT: 47100,
     };
-    const content = generateEnvContent('005', ports, 'project');
+    const content = generateEnvContent('/path/to/session', ports, 'project');
 
     expect(content).toContain('POSTGRES_PORT=47110');
     expect(content).toContain('REDIS_PORT=47111');
@@ -24,14 +24,14 @@ describe('generateEnvContent', () => {
   });
 
   it('ends with newline', () => {
-    const content = generateEnvContent('001', {}, 'project');
+    const content = generateEnvContent('/path/to/session', {}, 'project');
     expect(content.endsWith('\n')).toBe(true);
   });
 
   it('handles empty ports', () => {
-    const content = generateEnvContent('001', {}, 'project');
-    expect(content).toContain('SESSION_ID=001');
-    expect(content).toContain('COMPOSE_PROJECT_NAME=project-001');
+    const content = generateEnvContent('/path/to/session', {}, 'project');
+    expect(content).toContain('SESSION_DIR=/path/to/session');
+    expect(content).toContain('COMPOSE_PROJECT_NAME=project');
   });
 });
 

@@ -1,9 +1,12 @@
 export default {
   projectName: 'hello',
-  portBase: 47000,
   sessionsDir: '../sessions',
-  ports: {
-    APP_PORT: 0,
-  },
+
+  // Services to expose with random ports (v0.6+ requirement)
+  services: [
+    { name: 'app', internalPort: 3000 },
+  ],
+
+  // No setup commands needed for this simple example
   setup: [],
 };

@@ -12,6 +12,7 @@ export interface SessionConfig {
   apps?: string[]; // Available app profiles for docker mode
   envFiles?: string[]; // .env files to copy to session and update DATABASE_URL
   setup: string[];
+  services?: Array<{ name: string; internalPort: number }>; // Services to expose with ports
 }
 
 const DEFAULT_CONFIG: SessionConfig = {

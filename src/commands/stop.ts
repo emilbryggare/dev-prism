@@ -1,28 +1,33 @@
+import { existsSync, unlinkSync } from 'node:fs';
+import { resolve } from 'node:path';
 import chalk from 'chalk';
 import { execa } from 'execa';
-import { SessionStore } from '../lib/store.js';
+import { getSession } from '../lib/session.js';
 
-export async function stopSession(
-  projectRoot: string,
-  sessionId: string,
-): Promise<void> {
-  const store = new SessionStore();
-  let sessionDir: string;
-  try {
-    const session = store.findSession(projectRoot, sessionId);
-    if (!session) {
-      console.error(chalk.red(`Error: Session ${sessionId} not found.`));
-      process.exit(1);
-    }
-    sessionDir = session.session_dir;
-  } finally {
-    store.close();
+export async function stopSession(workingDir: string): Promise<void> {
+  const session = await getSession(workingDir);
+
+  if (!session) {
+    console.error(chalk.red(`Error: No session found in directory: ${workingDir}`));
+    process.exit(1);
   }
 
-  // Use stop instead of down to preserve volumes
-  await execa(
-    'docker',
-    ['compose', '-f', 'docker-compose.session.yml', '--env-file', '.env.session', 'stop'],
-    { cwd: sessionDir, stdio: 'inherit' }
-  );
+  console.log(chalk.blue(`Stopping session in ${workingDir}...`));
+
+  // Stop containers directly using their container IDs
+  // This is more reliable than using docker-compose because it doesn't depend on
+  // .env.session or other files that may have been deleted
+  if (session.containers.length > 0) {
+    const containerIds = session.containers.map((c) => c.id);
+    await execa('docker', ['stop', ...containerIds], { stdio: 'inherit' });
+  }
+
+  // Delete .env.session file
+  const envPath = resolve(workingDir, '.env.session');
+  if (existsSync(envPath)) {
+    unlinkSync(envPath);
+    console.log(chalk.gray(`Deleted: ${envPath}`));
+  }
+
+  console.log(chalk.green('Session stopped.'));
 }

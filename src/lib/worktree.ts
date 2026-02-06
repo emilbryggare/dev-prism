@@ -23,9 +23,9 @@ export function findNextSessionId(usedIds: Set<string>): string {
   throw new Error('No available session IDs (001-999 all in use)');
 }
 
-export function generateDefaultBranchName(sessionId: string): string {
-  const today = new Date().toISOString().split('T')[0];
-  return `session/${today}/${sessionId}`;
+export function generateDefaultBranchName(): string {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
+  return `session/${timestamp}`;
 }
 
 export async function createWorktree(

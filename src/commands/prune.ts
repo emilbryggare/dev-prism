@@ -1,46 +1,44 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readdirSync, statSync } from 'node:fs';
+import { resolve, basename, join } from 'node:path';
 import { createInterface } from 'node:readline';
 import chalk from 'chalk';
-import { loadConfig } from '../lib/config.js';
 import { removeWorktree } from '../lib/worktree.js';
 import * as docker from '../lib/docker.js';
-import { SessionStore } from '../lib/store.js';
+import { listActiveSessions } from '../lib/session.js';
+import { loadConfig, getSessionsDir } from '../lib/config.js';
 
 export interface PruneOptions {
   yes?: boolean;
 }
 
-export async function pruneSessions(projectRoot: string, options: PruneOptions): Promise<void> {
+export async function pruneSessions(options: PruneOptions): Promise<void> {
+  // Get all running sessions from Docker
+  const runningSessions = await listActiveSessions();
+  const runningDirs = new Set(runningSessions.map((s) => s.workingDir));
+
+  // Find project root and sessions directory
+  const projectRoot = process.cwd();
   const config = await loadConfig(projectRoot);
+  const sessionsDir = getSessionsDir(config, projectRoot);
 
-  const store = new SessionStore();
-  try {
-
-  const sessions = store.listByProject(projectRoot);
-
-  if (sessions.length === 0) {
-    console.log(chalk.gray('No sessions found.'));
+  if (!existsSync(sessionsDir)) {
+    console.log(chalk.gray('No sessions directory found.'));
     return;
   }
 
-  // Find stopped sessions
-  const stoppedSessions: Array<{ sessionId: string; path: string; branch: string; inPlace: boolean }> = [];
-  for (const session of sessions) {
-    const envFile = resolve(session.session_dir, '.env.session');
-    let running = false;
-    if (existsSync(envFile)) {
-      running = await docker.isRunning({ cwd: session.session_dir });
-    }
-    if (!running) {
-      stoppedSessions.push({
-        sessionId: session.session_id,
-        path: session.session_dir,
-        branch: session.branch,
-        inPlace: session.in_place === 1,
-      });
-    }
-  }
+  // Find all session directories
+  const sessionDirs = readdirSync(sessionsDir)
+    .map((name) => join(sessionsDir, name))
+    .filter((path) => {
+      try {
+        return statSync(path).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+
+  // Find stopped sessions (directories that exist but have no running containers)
+  const stoppedSessions = sessionDirs.filter((dir) => !runningDirs.has(dir));
 
   if (stoppedSessions.length === 0) {
     console.log(chalk.gray('No stopped sessions to prune.'));
@@ -48,8 +46,9 @@ export async function pruneSessions(projectRoot: string, options: PruneOptions):
   }
 
   console.log(chalk.yellow(`\nFound ${stoppedSessions.length} stopped session(s) to prune:`));
-  for (const session of stoppedSessions) {
-    console.log(chalk.gray(`  - Session ${session.sessionId} (${session.branch})`));
+  for (const sessionDir of stoppedSessions) {
+    const dirName = basename(sessionDir);
+    console.log(chalk.gray(`  - ${dirName}`));
   }
   console.log('');
 
@@ -61,7 +60,12 @@ export async function pruneSessions(projectRoot: string, options: PruneOptions):
     });
 
     const answer = await new Promise<string>((resolve) => {
-      rl.question(chalk.red('Are you sure you want to delete these sessions? This cannot be undone. [y/N] '), resolve);
+      rl.question(
+        chalk.red(
+          'Are you sure you want to delete these sessions? This cannot be undone. [y/N] '
+        ),
+        resolve
+      );
     });
     rl.close();
 
@@ -73,32 +77,27 @@ export async function pruneSessions(projectRoot: string, options: PruneOptions):
 
   console.log(chalk.blue('\nPruning stopped sessions...\n'));
 
-  for (const session of stoppedSessions) {
-    console.log(chalk.gray(`  Removing session ${session.sessionId}...`));
+  for (const sessionDir of stoppedSessions) {
+    const dirName = basename(sessionDir);
+    console.log(chalk.gray(`  Removing ${dirName}...`));
     try {
       // Clean up any docker resources
-      const envFile = resolve(session.path, '.env.session');
+      const envFile = resolve(sessionDir, '.env.session');
       if (existsSync(envFile)) {
         try {
-          await docker.down({ cwd: session.path });
+          await docker.down({ cwd: sessionDir });
         } catch {
           // Ignore errors - containers might already be removed
         }
       }
-      // Remove worktree and branch (skip for in-place sessions)
-      if (!session.inPlace) {
-        await removeWorktree(projectRoot, session.path, session.branch);
-      }
-      store.markDestroyed(projectRoot, session.sessionId);
-      console.log(chalk.green(`  Session ${session.sessionId} removed.`));
+
+      // Remove worktree and branch
+      await removeWorktree(projectRoot, sessionDir, dirName);
+      console.log(chalk.green(`  Removed ${dirName}`));
     } catch {
-      console.log(chalk.yellow(`  Warning: Could not fully remove session ${session.sessionId}`));
+      console.log(chalk.yellow(`  Warning: Could not fully remove ${dirName}`));
     }
   }
 
   console.log(chalk.green(`\nPruned ${stoppedSessions.length} session(s).`));
-
-  } finally {
-    store.close();
-  }
 }
