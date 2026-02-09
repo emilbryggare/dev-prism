@@ -1,18 +1,32 @@
-export { createSession } from './commands/create.js';
-export { destroySession } from './commands/destroy.js';
+export { createSession, type CreateOptions } from './commands/create.js';
+export { destroySession, type DestroyOptions } from './commands/destroy.js';
 export { listSessions } from './commands/list.js';
 export { showInfo } from './commands/info.js';
-export { startSession } from './commands/start.js';
-export { stopSession } from './commands/stop.js';
-export { stopAllSessions } from './commands/stop-all.js';
-export { pruneSessions } from './commands/prune.js';
-export { streamLogs } from './commands/logs.js';
+export { withEnv } from './commands/with-env.js';
+export { showEnv, type EnvOptions } from './commands/env.js';
+export { pruneSessions, type PruneOptions } from './commands/prune.js';
 export { installClaude, type ClaudeOptions } from './commands/claude.js';
 export { loadConfig, type SessionConfig } from './lib/config.js';
-export { extractPorts } from './lib/ports.js';
-export { generateDefaultBranchName } from './lib/worktree.js';
-export { generateEnvContent, writeEnvFile, renderAppEnv, writeAppEnvFiles } from './lib/env.js';
-export { up, down, ps, logs as dockerLogs, isRunning, type DockerComposeOptions } from './lib/docker.js';
-export { listManagedContainers, inspectContainer, getPortMappings, sessionExists, type ContainerInfo, type PortMapping } from './lib/docker-inspect.js';
-export { listActiveSessions, getSession, type Session } from './lib/session.js';
-export { generateComposeFile, writeComposeFile } from './lib/compose.js';
+export {
+  openDatabase,
+  findProjectRoot,
+  createDbSession,
+  deleteDbSession,
+  getDbSession,
+  listDbSessions,
+  allocatePorts,
+  getPortAllocations,
+  getAllocatedPorts,
+  reservePort,
+  unreservePort,
+  getReservedPorts,
+  type DbSession,
+  type PortAllocation,
+} from './lib/db.js';
+export {
+  renderTemplate,
+  buildSessionEnv,
+  formatEnvFile,
+  getComposeProjectName,
+} from './lib/env.js';
+export { generateDefaultBranchName, createWorktree, removeWorktree } from './lib/worktree.js';

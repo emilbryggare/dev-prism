@@ -2,590 +2,221 @@
 
 ## Overview
 
-dev-prism is a **stateless orchestration layer** for Docker Compose that enables parallel development sessions with complete isolation. It treats Docker as the single source of truth and derives all state from container inspection.
+dev-prism is a **port allocator, env injector, and worktree manager** for parallel development sessions. It uses SQLite as the source of truth for port allocation and provides `with-env` as the universal interface for injecting session-specific environment variables into any command.
 
 ## Design Philosophy
 
-### Core Principle: Stateless by Design
+### Core Principle: Allocate Ports, Inject Env, Get Out of the Way
 
-**No database. No persistent state. Docker is reality.**
+dev-prism has three responsibilities:
+1. **Port allocation** — SQLite with UNIQUE constraints, `get-port` for finding free TCP ports
+2. **Env injection** — `with-env` command that injects allocated ports into any command
+3. **Worktree management** — creates/destroys git worktrees for isolation
 
-Every dev-prism command:
-1. Queries Docker to understand current state
-2. Performs requested action
-3. Updates ephemeral files (`.env.session`) that can be regenerated at any time
+Docker, process management, and everything else is the user's responsibility.
 
-This eliminates entire classes of problems:
-- State divergence between database and Docker
-- Stale session metadata
-- Complex reconciliation logic
-- Database corruption or loss
+### Why Not Docker Orchestration?
 
-### Why Not a Database?
+**v0.6 approach (abandoned):**
+- dev-prism generated `docker-compose.session.yml`
+- dev-prism ran `docker compose up/down`
+- dev-prism discovered ports from running containers
+- Result: Tightly coupled to Docker, hard to support app containers in monorepos
 
-**v1 Problems (with SQLite):**
-```
-User runs: docker rm -f postgres-001
-Database says: Session 001 is running
-Reality: Container is gone
-Result: Inconsistent state, manual intervention needed
-```
-
-**v2 Solution (stateless):**
-```
-User runs: docker rm -f postgres-001
-dev-prism list: Queries Docker, sees no containers
-Result: Session simply doesn't appear - no inconsistency possible
-```
+**v0.7 approach:**
+- dev-prism allocates ports and injects env vars
+- Users manage their own Docker setup (or any other tool)
+- `docker-compose.yml` uses standard `${VAR:-default}` substitution
+- Result: Universal, works with Docker, bare-metal, or any runtime
 
 ## Architecture Layers
 
-### 1. Docker Inspection Layer (`docker-inspect.ts`)
+### 1. Database Layer (`db.ts`)
 
-**Purpose:** Query and parse Docker's current state
+**Purpose:** SQLite-backed port allocation with UNIQUE constraints
 
-**Key Functions:**
-- `listManagedContainers()` - Find all dev-prism containers
-- `inspectContainer(id)` - Get detailed port mappings
-- `getPortMappings(workingDir)` - Extract ports for a session
-- `groupContainersByWorkingDir()` - Organize containers into sessions
+**Schema:**
+```sql
+sessions (id TEXT PK, branch TEXT, created_at TEXT)
+port_allocations (session_id FK, service TEXT, port INTEGER UNIQUE)
+reservations (port INTEGER PK, reason TEXT, created_at TEXT)
+```
 
-**How it works:**
+**Key design:**
+- `port INTEGER NOT NULL UNIQUE` prevents cross-session conflicts
+- `ON DELETE CASCADE` auto-cleans port_allocations when session is deleted
+- WAL mode + busy_timeout=5000 for concurrent access
+- `get-port` finds free TCP ports, SQLite UNIQUE provides the guarantee
+
+**Port allocation flow:**
 ```typescript
-// Query all managed containers
-docker ps --filter "label=dev-prism.managed=true" --format json
+async function allocatePorts(db, sessionId, services) {
+  // 1. Get all existing allocated + reserved ports
+  const exclude = [...getAllocatedPorts(db), ...getReservedPorts(db)];
 
-// Parse labels to find sessions
-{
-  "dev-prism.working_dir": "/path/to/session",
-  "dev-prism.service": "postgres",
-  "dev-prism.internal_port": "5432"
-}
-
-// Inspect for port mappings
-docker inspect <container-id>
-// Extract: NetworkSettings.Ports["5432/tcp"][0].HostPort = "54321"
-```
-
-### 2. Session Model (`session.ts`)
-
-**Purpose:** Build session objects from Docker state
-
-**Session Identity:**
-```typescript
-interface Session {
-  sessionId: string;        // Full working directory path
-  workingDir: string;       // Same as sessionId
-  running: boolean;         // Any container running?
-  containers: ContainerInfo[];
-  ports: PortMapping[];
-  createdAt: string | null;
-}
-```
-
-**Why directory path as ID?**
-- Natural, filesystem-based identity
-- One session per directory maximum
-- No need to track ID allocation
-- Works for both worktree and in-place modes
-
-**Building sessions:**
-```typescript
-async function buildSession(workingDir: string, containers: ContainerInfo[]): Promise<Session> {
-  // Inspect each container for port details
-  // Group ports by service
-  // Return complete session object
-}
-```
-
-### 3. Port Management (`ports.ts`, `compose.ts`)
-
-**Strategy: Random allocation + discovery**
-
-#### Why Random Ports?
-
-**Alternatives considered:**
-1. **Predictable allocation** (v1 approach)
-   - Formula: `basePort + sessionId * 100 + offset`
-   - Problem: Requires centralized tracking
-   - Problem: Users don't actually need predictability
-
-2. **Port pooling**
-   - Pre-allocate ranges
-   - Problem: Complex to implement
-   - Problem: Still needs coordination
-
-3. **Random assignment** (chosen)
-   - Docker picks from ephemeral range (32768-60999)
-   - 28,000 available ports
-   - Natural conflict avoidance
-   - Zero configuration
-
-#### Implementation
-
-**Phase 1: Compose file generation**
-```yaml
-services:
-  postgres:
-    ports:
-      - "0:5432"  # Host port 0 = random assignment
-```
-
-**Phase 2: Container startup**
-```bash
-docker compose up -d
-# Docker assigns: 54321:5432, 32768:3000, etc.
-```
-
-**Phase 3: Port discovery**
-```typescript
-async function getPortMappings(workingDir: string): Promise<PortMapping[]> {
-  const containers = await listManagedContainers();
-  const sessionContainers = containers.filter(
-    c => c.labels['dev-prism.working_dir'] === workingDir
-  );
-
-  // Inspect each container
-  for (const container of sessionContainers) {
-    const detailed = await inspectContainer(container.id);
-    // Extract: port.publicPort from NetworkSettings.Ports
+  // 2. Find free ports using get-port (checks TCP availability)
+  for (const service of services) {
+    const port = await getPort({ exclude });
+    exclude.push(port);
+    allocations.push({ service, port });
   }
+
+  // 3. INSERT all in a single transaction
+  db.transaction(() => {
+    for (const alloc of allocations) insert.run(alloc);
+  })();
+
+  // 4. Retry once on UNIQUE violation (race condition)
 }
 ```
 
-**Phase 4: Environment file update**
-```typescript
-// .env.session
-POSTGRES_PORT=54321  # Discovered
-APP_PORT=32768       # Discovered
-```
+### 2. Config Layer (`config.ts`)
 
-### 4. Container Labeling
-
-**Every container gets:**
-```yaml
-labels:
-  dev-prism.managed: "true"                    # For filtering
-  dev-prism.working_dir: "/full/path/to/dir"  # Session grouping
-  dev-prism.session_id: "/full/path/to/dir"   # Identity
-  dev-prism.service: "postgres"               # Service name
-  dev-prism.internal_port: "5432"             # Container port
-  dev-prism.created_at: "2026-02-06T12:30:45Z"
-```
-
-**Why labels?**
-- Native Docker feature
-- Survives container restarts
-- Queryable with `docker ps --filter`
-- No external state needed
-
-### 5. Compose File Generation (`compose.ts`)
-
-**Problem:** Users shouldn't write `docker-compose.session.yml`
-
-**Solution:** Generate it automatically
+**Purpose:** Load and validate `prism.config.mjs`
 
 ```typescript
-function generateComposeFile(
-  workingDir: string,
-  projectName: string,
-  services: Array<{ name: string; internalPort: number }>
-): string {
-  // For each service:
-  // 1. Extend from docker-compose.yml
-  // 2. Add random port binding (0:internalPort)
-  // 3. Add dev-prism labels
-  // 4. Return YAML string
+interface SessionConfig {
+  sessionsDir: string;
+  ports: string[];                    // Service names to allocate ports for
+  env?: Record<string, string>;      // Global env templates
+  apps?: Record<string, Record<string, string>>;  // App-specific env templates
+  setup: string[];
 }
 ```
 
-**Why extend instead of copy?**
-- Single source of truth for service definitions
-- Users maintain only `docker-compose.yml`
-- dev-prism adds session-specific configuration
+**Template syntax:** `${service_name}` is replaced with the allocated port for that service.
 
-### 6. Auto-Healing
+### 3. Env Layer (`env.ts`)
 
-**Principle:** Commands regenerate missing artifacts from Docker state
+**Purpose:** Render env templates and build session environment
 
-**Scenarios:**
+**Key functions:**
+- `renderTemplate(template, ports)` — substitutes `${service}` with port values
+- `buildSessionEnv(config, workingDir, allocations, appName?)` — renders global env, optionally merges app-specific env
+- `formatEnvFile(env)` — formats as `KEY=value\n` for file output
+- `getComposeProjectName(workingDir, projectName?)` — MD5 hash for Docker project namespace
 
-1. **Missing `.env.session`**
-   ```bash
-   $ rm .env.session
-   $ dev-prism info
-   # Queries Docker, extracts ports, regenerates file
-   ```
+### 4. Command Layer
 
-2. **Manual container removal**
-   ```bash
-   $ docker rm -f postgres-001
-   $ dev-prism list
-   # Session simply doesn't appear - no error
-   ```
+**`with-env` — the centerpiece:**
+```
+findProjectRoot(cwd) → fails? → exec command as-is (pass-through)
+getDbSession(db, cwd) → no session? → exec command as-is (pass-through)
+session found → getPortAllocations → buildSessionEnv → merge with process.env → exec
+```
 
-3. **Orphaned files**
-   ```bash
-   $ dev-prism stop
-   # Deletes .env.session
-   # If containers gone, no error - just cleanup
-   ```
+Pass-through behavior is critical: makes `with-env` safe in Makefiles/scripts regardless of whether a session exists.
+
+**`create` flow:**
+1. Load config, determine working directory (worktree or in-place)
+2. Create git worktree (if not in-place)
+3. INSERT session record in SQLite
+4. Allocate ports via `get-port` + SQLite transaction
+5. Run setup commands with session env injected
+6. Print summary
+
+**`destroy` flow:**
+1. DELETE session from SQLite (cascades to port_allocations)
+2. Remove git worktree if applicable
 
 ## Data Flow
 
 ### Create Session
-
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ 1. Check for existing session                               │
-│    docker ps --filter "label=dev-prism.working_dir=<path>"  │
-│    If found: Exit with error                                │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 2. Create worktree (or use current dir)                     │
-│    git worktree add <path> -b <branch>                      │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 3. Generate docker-compose.session.yml                      │
-│    - Extends docker-compose.yml services                    │
-│    - Adds ports: "0:5432" (random host port)                │
-│    - Adds dev-prism labels                                  │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 4. Write .env.session stub                                  │
-│    COMPOSE_PROJECT_NAME=project-<hash>                      │
-│    SESSION_DIR=<path>                                       │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 5. Start containers                                         │
-│    docker compose up -d                                     │
-│    (Docker assigns random ports)                            │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 6. Discover ports                                           │
-│    docker inspect <container-ids>                           │
-│    Extract NetworkSettings.Ports                            │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 7. Update .env.session                                      │
-│    POSTGRES_PORT=54321                                      │
-│    APP_PORT=32768                                           │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────┐
+│ 1. Load config                      │
+│    prism.config.mjs → ports          │
+└────────────────────────────────────┘
+                  ↓
+┌────────────────────────────────────┐
+│ 2. Create worktree (optional)       │
+│    git worktree add <path>          │
+└────────────────────────────────────┘
+                  ↓
+┌────────────────────────────────────┐
+│ 3. INSERT session in SQLite         │
+│    sessions (id, branch, created_at)│
+└────────────────────────────────────┘
+                  ↓
+┌────────────────────────────────────┐
+│ 4. Allocate ports                   │
+│    get-port → SQLite UNIQUE check   │
+│    port_allocations (service, port) │
+└────────────────────────────────────┘
+                  ↓
+┌────────────────────────────────────┐
+│ 5. Run setup commands               │
+│    env injected via buildSessionEnv │
+└────────────────────────────────────┘
 ```
 
-### List Sessions
-
+### with-env Execution
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ 1. Query all managed containers                             │
-│    docker ps --filter "label=dev-prism.managed=true"        │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 2. Group by working_dir label                               │
-│    Map<workingDir, ContainerInfo[]>                         │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 3. For each session:                                        │
-│    - Inspect containers for port mappings                   │
-│    - Build Session object                                   │
-│    - Display summary                                        │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Stop Session
-
-```
-┌─────────────────────────────────────────────────────────────┐
-│ 1. Find session by working dir                              │
-│    docker ps --filter "label=dev-prism.working_dir=<path>"  │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 2. Stop containers                                          │
-│    docker compose -f docker-compose.session.yml stop        │
-└─────────────────────────────────────────────────────────────┘
-                              ↓
-┌─────────────────────────────────────────────────────────────┐
-│ 3. Delete ephemeral files                                   │
-│    rm .env.session                                          │
-└─────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────┐
+│ 1. Find project root               │
+│    Walk up looking for config       │
+│    Not found → pass-through         │
+└────────────────────────────────────┘
+                  ↓
+┌────────────────────────────────────┐
+│ 2. Look up session by cwd           │
+│    No session → pass-through        │
+└────────────────────────────────────┘
+                  ↓
+┌────────────────────────────────────┐
+│ 3. Build session env                │
+│    Render templates with ports      │
+│    Merge global + app-specific env  │
+└────────────────────────────────────┘
+                  ↓
+┌────────────────────────────────────┐
+│ 4. Exec command                     │
+│    execa(cmd, args, { env: merged })│
+│    Forward exit code                │
+└────────────────────────────────────┘
 ```
 
 ## Design Decisions
 
-### Decision: Directory Path as Session ID
+### SQLite over .env.session Files
+- Central registry enables atomic port allocation with UNIQUE constraints
+- Instant `list` without directory scanning
+- Survives worktree deletion
+- CASCADE delete keeps things clean
 
-**Alternatives:**
-1. Numeric IDs (001, 002, 003) - requires allocation tracking
-2. UUIDs - not human-friendly
-3. Branch names - might conflict
-4. Directory paths - chosen
+### `with-env` Pass-Through
+- No session = no injection = command runs normally
+- Safe to use unconditionally in scripts, Makefiles, CI
+- No error output in pass-through mode
 
-**Rationale:**
-- Natural filesystem identity
-- One session per directory makes sense
-- No allocation needed
-- Works for both worktree and in-place modes
-- Prevents accidental duplicate sessions
+### `get-port` + UNIQUE Constraint
+- `get-port` checks TCP availability (port not in use by OS)
+- SQLite UNIQUE prevents cross-session conflicts
+- Two-phase: gather candidates async, then INSERT in sync transaction
+- Retry once on race condition
 
-### Decision: Random Port Assignment
+### `better-sqlite3` over Alternatives
+- Synchronous API (simpler code, no async overhead)
+- Fast and mature
+- Needs `--external` in tsup config (native module)
 
-**Why not predictable?**
-
-**User interview findings:**
-- Programmtic discovery: ✅ Critical (read from file)
-- Port conflict avoidance: ✅ Critical
-- Stable port numbers: ❌ Nice-to-have, not critical
-
-**Analysis:**
-- Users need to discover ports anyway (for tooling)
-- Port stability was assumed requirement, not actual
-- Random ports eliminate allocation complexity
-- Docker's ephemeral range is sufficient
-
-**Trade-offs:**
-- Pro: Zero configuration
-- Pro: Natural conflict avoidance
-- Pro: Simpler implementation
-- Con: Can't memorize ports
-- Con: URLs change between starts
-- Mitigation: `.env.session` provides discovery
-
-### Decision: No Database
-
-**Why SQLite seemed necessary (v1 thinking):**
-- Track session allocation
-- Store port assignments
-- Record session history
-- Maintain working directory mapping
-
-**Reality check:**
-- Session allocation: Not needed with directory-based IDs
-- Port assignments: Docker knows, can be queried
-- Session history: Not actually used
-- Directory mapping: Container labels provide this
-
-**What we actually need:**
-- Find sessions: `docker ps --filter label=...`
-- Get ports: `docker inspect`
-- Session identity: Container labels
-- Session existence: Running containers
-
-All available through Docker API.
-
-### Decision: Labels Over Tags
-
-**Why not container name prefixes?**
-```bash
-# Name-based
-myproject-001-postgres
-myproject-001-app
-
-# Label-based
-postgres (+ labels)
-app (+ labels)
-```
-
-**Labels win:**
-- More metadata capacity
-- Structured querying (`--filter label=key=value`)
-- No naming conflicts
-- Standard Docker pattern
-- Can add metadata without breaking names
-
-### Decision: Auto-Healing Over Validation
-
-**Alternative: Strict validation**
-```typescript
-if (!existsSync('.env.session')) {
-  throw new Error('Session corrupted - .env.session missing');
-}
-```
-
-**Chosen: Regeneration**
-```typescript
-if (!existsSync('.env.session')) {
-  const ports = await getPortMappings(workingDir);
-  writeEnvFile(workingDir, ports, projectName);
-}
-```
-
-**Why regeneration?**
-- Users don't care about "corrupt state"
-- They care about "does it work?"
-- Missing files are easy to regenerate
-- Reduces support burden
-- Aligns with stateless philosophy
-
-## Performance Considerations
-
-### Docker Query Overhead
-
-**Concern:** Querying Docker on every command might be slow
-
-**Measurements:**
-- `docker ps --filter`: ~50ms (100 containers)
-- `docker inspect`: ~30ms per container
-- Total for `dev-prism list` with 10 sessions: ~200ms
-
-**Mitigation:**
-- Cache within single command execution
-- Parallel inspection when possible
-- Filter early (managed=true label)
-
-**Trade-off:**
-- Slight delay vs. perfect accuracy
-- 200ms is acceptable for CLI tool
-- Always-correct trumps always-fast
-
-### Port Discovery Delay
-
-**Concern:** Session creation slower due to discovery phase
-
-**Impact:**
-- Additional 3s wait for containers to start
-- Additional ~100ms for inspection
-- Total: ~3.1s overhead
-
-**Justification:**
-- One-time cost per session
-- Users expect startup delay anyway
-- Correctness worth the wait
+### No Docker Integration
+- dev-prism doesn't know about Docker
+- COMPOSE_PROJECT_NAME is just another env var
+- User's `docker-compose.yml` uses standard `${VAR:-default}` substitution
+- Works with any tool: Docker, Podman, bare-metal, etc.
 
 ## Testing Strategy
 
 ### Unit Tests
+- **db.test.ts** — schema idempotency, CRUD, port allocation, UNIQUE constraints, CASCADE
+- **config.test.ts** — path resolution
+- **env.test.ts** — template rendering, env building, compose project name
+- **worktree.test.ts** — branch name generation
 
-**What to test:**
-- Port extraction from mappings
-- Label parsing
-- Environment file generation
-- Branch name generation
-
-**What not to test:**
-- Docker integration (flaky, slow)
-- File system operations (use mocks)
-- Network calls (use fixtures)
-
-### Integration Tests
-
-**Manual verification scenarios:**
-1. Create, list, stop, destroy flow
-2. Parallel session creation
-3. Manual container removal (verify auto-heal)
-4. .env.session deletion (verify regeneration)
-5. Port conflict handling
-
-## Future Enhancements
-
-### Potential Improvements
-
-**1. Service Discovery from docker-compose.yml**
-Currently hardcoded:
-```typescript
-const services = [
-  { name: 'postgres', internalPort: 5432 },
-  { name: 'app', internalPort: 3000 },
-];
-```
-
-Could parse from user's docker-compose.yml:
-```typescript
-const services = await parseComposeServices('docker-compose.yml');
-```
-
-**2. Runtime Port Injection**
-```bash
-# Instead of reading .env.session
-dev-prism exec -- npm test
-
-# Discovers ports, injects, runs command
-```
-
-**3. Remote Docker Support**
-```bash
-export DOCKER_HOST=ssh://remote
-dev-prism list  # Works on remote machine
-```
-
-Already possible - Docker client handles it.
-
-**4. Session Templates**
-```javascript
-// session.config.mjs
-templates: {
-  'api-only': { apps: ['api'] },
-  'full-stack': { apps: ['api', 'web', 'worker'] },
-}
-```
-
-```bash
-dev-prism create --template api-only
-```
-
-### What NOT to Add
-
-**1. Session history tracking**
-- Adds state back in
-- Users don't need it
-- Logs provide this if needed
-
-**2. Predictable port allocation**
-- Adds complexity back
-- Solves non-problem
-- Random ports work fine
-
-**3. Cross-session orchestration**
-- Out of scope
-- Use k8s if you need this
-- Keep it simple
-
-## Migration Path
-
-### From v0.5.x (Database Version)
-
-**Breaking changes:**
-- Session IDs: `001` → `/path/to/session`
-- Commands: `dev-prism stop 001` → `dev-prism stop`
-- Port allocation: calculated → random
-- Storage: SQLite → none
-
-**Migration:**
-```bash
-# On v0.5.x
-dev-prism list          # Note active sessions
-dev-prism stop-all      # Stop everything
-dev-prism destroy --all # Clean up
-
-# Upgrade
-pnpm install -g dev-prism@0.6
-
-# Recreate as needed
-cd /path/to/project
-dev-prism create
-```
-
-**Data migration:**
-- Not possible (architecture changed)
-- Not needed (sessions are ephemeral)
-- Directories can be reused (just recreate containers)
-
-## Conclusion
-
-dev-prism v0.6 embraces **radical simplicity** through statelessness. By treating Docker as the single source of truth, it eliminates entire categories of bugs and complexity.
-
-The architecture prioritizes:
-1. **Correctness** over speed (but fast enough)
-2. **Simplicity** over features (do one thing well)
-3. **Auto-healing** over validation (regenerate, don't complain)
-4. **Docker reality** over local state (query, don't cache)
-
-This results in a tool that's **impossible to break** - if Docker is running, dev-prism works.
+### Integration Tests (Manual)
+1. `dev-prism create --in-place` → session in SQLite, ports allocated
+2. `dev-prism with-env -- env | grep PORT` → ports injected
+3. `dev-prism with-env -- docker compose up -d` → Docker uses allocated ports
+4. `dev-prism destroy` → session + ports removed
+5. `dev-prism with-env -- echo hello` outside session → passes through
