@@ -13,16 +13,6 @@ async function branchExists(projectRoot: string, branchName: string): Promise<bo
   }
 }
 
-export function findNextSessionId(usedIds: Set<string>): string {
-  for (let i = 1; i <= 999; i++) {
-    const sessionId = String(i).padStart(3, '0');
-    if (!usedIds.has(sessionId)) {
-      return sessionId;
-    }
-  }
-  throw new Error('No available session IDs (001-999 all in use)');
-}
-
 export function generateDefaultBranchName(): string {
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, -5);
   return `session/${timestamp}`;

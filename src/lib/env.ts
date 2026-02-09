@@ -1,53 +1,19 @@
-import { writeFileSync, mkdirSync } from 'node:fs';
-import { resolve, dirname } from 'node:path';
+import { createHash } from 'node:crypto';
+import { basename } from 'node:path';
 import type { SessionConfig } from './config.js';
+import type { PortAllocation } from './db.js';
 
-// Generate .env.session content from discovered ports
-export function generateEnvContent(
-  workingDir: string,
-  ports: Record<string, number>,
-  projectName: string
-): string {
-  const lines = [
-    `# Auto-generated session environment`,
-    `SESSION_DIR=${workingDir}`,
-    `COMPOSE_PROJECT_NAME=${projectName}`,
-    '',
-    '# Discovered ports from running containers',
-  ];
-
-  for (const [name, port] of Object.entries(ports)) {
-    lines.push(`${name}=${port}`);
-  }
-
-  return lines.join('\n') + '\n';
-}
-
-// Write the main .env.session file for docker-compose
-export function writeEnvFile(
-  workingDir: string,
-  ports: Record<string, number>,
-  composeProjectName: string
-): string {
-  const content = generateEnvContent(workingDir, ports, composeProjectName);
-  const filePath = resolve(workingDir, '.env.session');
-  writeFileSync(filePath, content, 'utf-8');
-  return filePath;
-}
-
-// Render app-specific env template by substituting port variables
-export function renderAppEnv(
+export function renderTemplate(
   template: Record<string, string>,
   ports: Record<string, number>
 ): Record<string, string> {
   const result: Record<string, string> = {};
 
   for (const [key, value] of Object.entries(template)) {
-    // Replace ${VAR_NAME} with actual port values
     let rendered = value;
-    for (const [portName, portValue] of Object.entries(ports)) {
+    for (const [serviceName, portValue] of Object.entries(ports)) {
       rendered = rendered.replace(
-        new RegExp(`\\$\\{${portName}\\}`, 'g'),
+        new RegExp(`\\$\\{${serviceName}\\}`, 'g'),
         String(portValue)
       );
     }
@@ -57,30 +23,54 @@ export function renderAppEnv(
   return result;
 }
 
-// Write app-specific .env.session files (for CLI commands from host)
-export function writeAppEnvFiles(
+export function buildSessionEnv(
   config: SessionConfig,
   workingDir: string,
-  ports: Record<string, number>
-): string[] {
-  if (!config.appEnv) return [];
-
-  const writtenFiles: string[] = [];
-
-  for (const [appPath, template] of Object.entries(config.appEnv)) {
-    const env = renderAppEnv(template, ports);
-
-    const lines = [`# Auto-generated for session in ${workingDir}`, `SESSION_DIR=${workingDir}`];
-    for (const [key, value] of Object.entries(env)) {
-      lines.push(`${key}=${value}`);
-    }
-
-    const content = lines.join('\n') + '\n';
-    const envFilePath = resolve(workingDir, appPath, '.env.session');
-    mkdirSync(dirname(envFilePath), { recursive: true });
-    writeFileSync(envFilePath, content, 'utf-8');
-    writtenFiles.push(envFilePath);
+  allocations: PortAllocation[],
+  appName?: string
+): Record<string, string> {
+  const ports: Record<string, number> = {};
+  for (const alloc of allocations) {
+    ports[alloc.service] = alloc.port;
   }
 
-  return writtenFiles;
+  const env: Record<string, string> = {};
+
+  // Add COMPOSE_PROJECT_NAME
+  env.COMPOSE_PROJECT_NAME = getComposeProjectName(
+    workingDir,
+    config.projectName
+  );
+
+  // Render global env
+  if (config.env) {
+    Object.assign(env, renderTemplate(config.env, ports));
+  }
+
+  // Merge app-specific env
+  if (appName && config.apps?.[appName]) {
+    Object.assign(env, renderTemplate(config.apps[appName], ports));
+  }
+
+  return env;
+}
+
+export function formatEnvFile(env: Record<string, string>): string {
+  return (
+    Object.entries(env)
+      .map(([key, value]) => `${key}=${value}`)
+      .join('\n') + '\n'
+  );
+}
+
+export function getComposeProjectName(
+  workingDir: string,
+  projectName?: string
+): string {
+  const name = projectName ?? basename(workingDir);
+  const dirHash = createHash('md5')
+    .update(workingDir)
+    .digest('hex')
+    .substring(0, 8);
+  return `${name}-${dirHash}`;
 }

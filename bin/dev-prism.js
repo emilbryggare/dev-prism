@@ -6,107 +6,96 @@ import { destroySession } from '../dist/commands/destroy.js';
 import { listSessions } from '../dist/commands/list.js';
 import { installClaude } from '../dist/commands/claude.js';
 import { showInfo } from '../dist/commands/info.js';
-import { startSession } from '../dist/commands/start.js';
-import { stopSession } from '../dist/commands/stop.js';
-import { stopAllSessions } from '../dist/commands/stop-all.js';
+import { withEnv } from '../dist/commands/with-env.js';
+import { showEnv } from '../dist/commands/env.js';
 import { pruneSessions } from '../dist/commands/prune.js';
-import { streamLogs } from '../dist/commands/logs.js';
 
 const program = new Command();
 
 program
   .name('dev-prism')
-  .description('CLI tool for managing isolated parallel development sessions')
-  .version('0.6.0');
+  .description('Port allocator, env injector, and worktree manager for parallel development')
+  .version('0.7.0')
+  .enablePositionalOptions();
 
 program
   .command('create')
-  .description('Create a new isolated development session')
-  .option('-m, --mode <mode>', 'App mode: docker (default) or native', 'docker')
+  .description('Create a new session (allocate ports + optional worktree)')
   .option('-b, --branch <branch>', 'Git branch name (default: session/TIMESTAMP)')
-  .option('-W, --without <apps>', 'Exclude apps (comma-separated: app,web,widget)', (val) => val.split(','))
-  .option('--no-detach', 'Stream container logs after starting (default: detach)')
   .option('--in-place', 'Run in current directory instead of creating a worktree')
   .action(async (options) => {
     const projectRoot = process.cwd();
-    await createSession(projectRoot, undefined, {
-      mode: options.mode,
+    await createSession(projectRoot, {
       branch: options.branch,
-      detach: options.detach,
-      without: options.without,
       inPlace: options.inPlace,
     });
   });
 
 program
-  .command('destroy [directory]')
-  .description('Destroy a development session (defaults to current directory)')
+  .command('destroy')
+  .description('Destroy session for current directory (deallocate ports + remove worktree)')
   .option('-a, --all', 'Destroy all sessions')
-  .action(async (directory, options) => {
-    const workingDir = directory || process.cwd();
-    await destroySession(workingDir, { all: options.all });
+  .action(async (options) => {
+    await destroySession(process.cwd(), { all: options.all });
   });
 
 program
   .command('list')
-  .description('List all active development sessions')
+  .description('List all sessions')
   .action(async () => {
     await listSessions();
   });
 
 program
   .command('info')
-  .description('Show session info for current directory (useful for --in-place sessions)')
+  .description('Show session ports and env vars for current directory')
   .action(async () => {
     await showInfo(process.cwd());
   });
 
-program
-  .command('start [directory]')
-  .description('Start Docker services for a session (defaults to current directory)')
-  .option('-m, --mode <mode>', 'App mode: docker or native', 'docker')
-  .option('-W, --without <apps>', 'Exclude apps (comma-separated: app,web,widget)', (val) => val.split(','))
-  .action(async (directory, options) => {
-    const workingDir = directory || process.cwd();
-    await startSession(workingDir, {
-      mode: options.mode,
-      without: options.without,
-    });
+const withEnvCmd = program
+  .command('with-env [app]')
+  .description('Inject session env vars and exec a command')
+  .passThroughOptions()
+  .allowUnknownOption()
+  .action(async (app, options, cmd) => {
+    // Everything after -- becomes the command to run
+    const args = cmd.args;
+
+    // If app is provided but looks like the start of the command (no matching app),
+    // it might be the command itself. The separator is --.
+    // Commander puts everything after -- into cmd.args.
+
+    let appName;
+    let command;
+
+    if (app && args.length > 0) {
+      // app is provided and there are args after --
+      appName = app;
+      command = args;
+    } else if (app && args.length === 0) {
+      // No --, treat app as the first part of the command
+      // This handles: dev-prism with-env echo hello
+      command = [app];
+    } else {
+      command = args;
+    }
+
+    await withEnv(command, appName);
   });
 
 program
-  .command('stop [directory]')
-  .description('Stop Docker services for a session (defaults to current directory)')
-  .action(async (directory) => {
-    const workingDir = directory || process.cwd();
-    await stopSession(workingDir);
-  });
-
-program
-  .command('logs [directory]')
-  .description('Stream logs from a session\'s Docker services (defaults to current directory)')
-  .option('-m, --mode <mode>', 'App mode: docker or native', 'docker')
-  .option('-W, --without <apps>', 'Exclude apps (comma-separated: app,web,widget)', (val) => val.split(','))
-  .option('-n, --tail <lines>', 'Number of lines to show from the end', '50')
-  .action(async (directory, options) => {
-    const workingDir = directory || process.cwd();
-    await streamLogs(workingDir, {
-      mode: options.mode,
-      without: options.without,
-      tail: options.tail,
-    });
-  });
-
-program
-  .command('stop-all')
-  .description('Stop all running sessions (preserves data)')
-  .action(async () => {
-    await stopAllSessions();
+  .command('env')
+  .description('Print or write session env vars')
+  .option('-w, --write <path>', 'Write env to file instead of stdout')
+  .option('-a, --app <name>', 'Include app-specific env vars')
+  .action(async (options) => {
+    await showEnv({ write: options.write, app: options.app });
   });
 
 program
   .command('prune')
-  .description('Remove all stopped sessions (destroys data)')
+  .description('Remove orphaned sessions from the database')
   .option('-y, --yes', 'Skip confirmation prompt')
   .action(async (options) => {
     await pruneSessions({ yes: options.yes });
@@ -127,21 +116,20 @@ program
     const chalk = (await import('chalk')).default;
 
     console.log(`
-${chalk.bold('dev-prism')} - Manage isolated parallel development sessions
+${chalk.bold('dev-prism')} - Port allocator, env injector, and worktree manager
 
 ${chalk.bold('USAGE')}
   dev-prism <command> [options]
 
 ${chalk.bold('COMMANDS')}
-  ${chalk.cyan('create')}           Create a new session
-  ${chalk.cyan('destroy')} [dir]    Destroy a session (defaults to current directory)
-  ${chalk.cyan('list')}             List all active sessions
-  ${chalk.cyan('info')}             Show session info for current directory
-  ${chalk.cyan('start')} [dir]      Start Docker services (defaults to current directory)
-  ${chalk.cyan('stop')} [dir]       Stop Docker services (defaults to current directory)
-  ${chalk.cyan('stop-all')}         Stop all running sessions
-  ${chalk.cyan('logs')} [dir]       Stream logs (defaults to current directory)
-  ${chalk.cyan('prune')}            Remove all stopped session directories
+  ${chalk.cyan('create')}                        Create a new session (ports + worktree)
+  ${chalk.cyan('destroy')}                       Destroy session for current directory
+  ${chalk.cyan('list')}                          List all sessions
+  ${chalk.cyan('info')}                          Show session info for current directory
+  ${chalk.cyan('with-env')} [app] -- <command>   Inject env vars + exec command
+  ${chalk.cyan('env')}                           Print/write session env vars
+  ${chalk.cyan('prune')}                         Remove orphaned sessions
+  ${chalk.cyan('claude')}                        Install Claude Code integration
 
 ${chalk.bold('EXAMPLES')}
   ${chalk.gray('# Create a new session with worktree')}
@@ -150,26 +138,20 @@ ${chalk.bold('EXAMPLES')}
   ${chalk.gray('# Create session with specific branch name')}
   $ dev-prism create --branch feature/my-feature
 
-  ${chalk.gray('# Create session in native mode (apps run on host)')}
-  $ dev-prism create --mode native
-
-  ${chalk.gray('# Create session without web app')}
-  $ dev-prism create --without web
-
   ${chalk.gray('# Create session in current directory (no worktree)')}
   $ dev-prism create --in-place
 
-  ${chalk.gray('# Check session status in current directory')}
-  $ dev-prism info
+  ${chalk.gray('# Start Docker services with injected ports')}
+  $ dev-prism with-env -- docker compose up -d
 
-  ${chalk.gray('# Stop session in current directory')}
-  $ dev-prism stop
+  ${chalk.gray('# Run app with app-specific env vars')}
+  $ dev-prism with-env my-app -- pnpm dev
 
-  ${chalk.gray('# Stop all running sessions')}
-  $ dev-prism stop-all
+  ${chalk.gray('# Show session env vars')}
+  $ dev-prism env
 
-  ${chalk.gray('# Clean up old stopped session directories')}
-  $ dev-prism prune
+  ${chalk.gray('# Write env file for IDE')}
+  $ dev-prism env --write .env
 
   ${chalk.gray('# Destroy session in current directory')}
   $ dev-prism destroy
@@ -177,9 +159,8 @@ ${chalk.bold('EXAMPLES')}
   ${chalk.gray('# Destroy all sessions')}
   $ dev-prism destroy --all
 
-${chalk.bold('SESSION MODES')}
-  ${chalk.cyan('docker')} (default)  All apps run in containers
-  ${chalk.cyan('native')}            Only infrastructure in Docker, apps on host
+  ${chalk.gray('# Clean up orphaned sessions')}
+  $ dev-prism prune
 
 ${chalk.bold('MORE INFO')}
   Run ${chalk.cyan('dev-prism <command> --help')} for command-specific options
